@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "output": {"aspect_ratio": "9:16", "width": 1080, "height": 1920, "codec": "h264", "pixel_format": "yuv420p", "audio": false},
+  "image": {
+    "default": "flux-klein-4b-fp8",
+    "profiles": {
+      "flux-klein-4b-fp8": {
+        "source": "../image_3080_16gb_flux2_klein_4b_FIXED.json",
+        "api_template": "flux_t2i_api.json",
+        "qualified": false,
+        "models": ["flux-2-klein-4b-fp8.safetensors", "qwen_3_4b.safetensors", "flux2-vae.safetensors"]
+      }
+    }
+  },
+  "video": {
+    "default": "wan14b-lightx2v-4step",
+    "profiles": {
+      "wan14b-lightx2v-4step": {
+        "source": "../video_wan2_2_14B_flf2v.json",
+        "api_template": "wan14b_lightx2v_flf2v_api.json",
+        "qualified": false,
+        "sampler_steps": 4,
+        "loras": ["wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors", "wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"],
+        "candidate_profiles": [
+          {"width": 384, "height": 672, "frames": 49},
+          {"width": 480, "height": 848, "frames": 49},
+          {"width": 480, "height": 848, "frames": 81}
+        ]
+      },
+      "wan5b-fallback": {
+        "source": "../video_3080_16gb_wan2_2_5b_flf2v.json",
+        "api_template": "wan5b_flf2v_api.json",
+        "qualified": false,
+        "enabled_by_default": false
+      }
+    }
+  }
+}

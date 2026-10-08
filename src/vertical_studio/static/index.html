@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#10131a"><title>Vertical Video Studio</title>
+<link rel="manifest" href="/manifest.webmanifest"><link rel="stylesheet" href="/styles.css?v=history-1">
+</head><body>
+<header><div><span class="eyebrow">LOCAL PRODUCTION</span><h1>Vertical Video Studio</h1></div>
+<div id="runtime" class="status">Connecting...</div></header>
+<main>
+<aside>
+<button id="new-project" class="primary">+ New project</button>
+<div class="section-label">Projects</div><div id="projects"></div>
+</aside>
+<section id="workspace">
+<div id="empty" class="empty"><div class="phone-frame"><div class="safe-area"></div></div>
+<h2>Build a coherent vertical story</h2><p>Create a project to plan, approve, simulate, and render a 9:16 short.</p></div>
+<div id="project-view" hidden></div>
+</section></main>
+<dialog id="create-dialog"><form id="create-form">
+<h2>New vertical video</h2>
+<label>Title<input name="title" placeholder="Fogbound arrival"></label>
+<label>Idea<textarea name="idea" required minlength="3" placeholder="Describe the story or concept..."></textarea></label>
+<div class="row"><label>Duration<select name="duration_seconds"><option>10</option><option selected>15</option><option>20</option><option>30</option></select></label>
+<label>Style<input name="visual_style" value="cinematic 3D cartoon"></label></div>
+<label class="check"><input type="checkbox" name="research_required"> This subject needs current factual research</label>
+<label>Source URLs (optional, one per line)<textarea name="source_urls" placeholder="https://example.com/source"></textarea></label>
+<div class="actions"><button type="button" data-close>Cancel</button><button class="primary">Create & plan</button></div>
+</form></dialog>
+<div id="toast"></div><script src="/app.js?v=history-1" defer></script>
+</body></html>

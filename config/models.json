@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "controller": {
+    "repository": "Qwen/Qwen3-VL-4B-Instruct-GGUF",
+    "file": "Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+    "runtime": "llama.cpp",
+    "gpu_layers": 0,
+    "sha256": null
+  },
+  "comfy_models": [
+    {"file": "flux-2-klein-4b-fp8.safetensors", "directory": "diffusion_models", "sha256": null},
+    {"file": "qwen_3_4b.safetensors", "directory": "text_encoders", "sha256": null},
+    {"file": "flux2-vae.safetensors", "directory": "vae", "sha256": null},
+    {"file": "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors", "directory": "diffusion_models", "sha256": null},
+    {"file": "wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors", "directory": "diffusion_models", "sha256": null},
+    {"file": "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "directory": "text_encoders", "sha256": null},
+    {"file": "wan_2.1_vae.safetensors", "directory": "vae", "sha256": null},
+    {"file": "wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors", "directory": "loras", "sha256": null},
+    {"file": "wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors", "directory": "loras", "sha256": null}
+  ],
+  "note": "Populate and verify hashes on the final qualified installation."
+}

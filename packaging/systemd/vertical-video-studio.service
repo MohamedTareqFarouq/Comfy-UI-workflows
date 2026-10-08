@@ -1,0 +1,14 @@
+[Unit]
+Description=Vertical Video Studio
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/vertical-video-studio
+Environment=VVS_EXECUTION_MODE=simulation
+ExecStart=%h/vertical-video-studio/.venv/bin/vertical-studio serve
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

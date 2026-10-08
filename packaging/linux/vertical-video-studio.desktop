@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Vertical Video Studio
+Comment=Local-first 9:16 video production
+Exec=sh -lc 'systemctl --user start vertical-video-studio && xdg-open http://127.0.0.1:8765'
+Terminal=false
+Categories=AudioVideo;
