@@ -25,6 +25,12 @@ class Settings:
     comfy_url: str = "http://127.0.0.1:8188"
     llama_url: str = "http://127.0.0.1:8080"
     qwen_model: str = "Qwen3-VL-4B-Instruct-GGUF"
+    manage_qwen: bool = False
+    llama_executable: str = "llama"
+    qwen_hf_repo: str = "Qwen/Qwen3-VL-4B-Instruct-GGUF:Q4_K_M"
+    qwen_gpu_layers: int = 99
+    qwen_context_size: int = 8192
+    qwen_start_timeout: int = 300
     brave_api_key: str | None = None
 
     @property
@@ -61,6 +67,15 @@ def load_settings() -> Settings:
         comfy_url=os.getenv("VVS_COMFY_URL", "http://127.0.0.1:8188").rstrip("/"),
         llama_url=os.getenv("VVS_LLAMA_URL", "http://127.0.0.1:8080").rstrip("/"),
         qwen_model=os.getenv("VVS_QWEN_MODEL", "Qwen3-VL-4B-Instruct-GGUF"),
+        manage_qwen=os.getenv("VVS_MANAGE_QWEN", "false").lower()
+        in {"1", "true", "yes", "on"},
+        llama_executable=os.getenv("VVS_LLAMA_EXECUTABLE", "llama"),
+        qwen_hf_repo=os.getenv(
+            "VVS_QWEN_HF_REPO", "Qwen/Qwen3-VL-4B-Instruct-GGUF:Q4_K_M"
+        ),
+        qwen_gpu_layers=int(os.getenv("VVS_QWEN_GPU_LAYERS", "99")),
+        qwen_context_size=int(os.getenv("VVS_QWEN_CONTEXT_SIZE", "8192")),
+        qwen_start_timeout=int(os.getenv("VVS_QWEN_START_TIMEOUT", "300")),
         brave_api_key=os.getenv("VVS_BRAVE_API_KEY") or None,
     )
     settings.ensure_directories()

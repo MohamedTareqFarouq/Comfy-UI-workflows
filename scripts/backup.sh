@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-exec "$ROOT/.venv/bin/vertical-studio" backup "$@"
+source "$ROOT/scripts/runtime.sh"
+vvs_select_runtime "$ROOT"
+exec "$VVS_PYTHON_BIN" -m vertical_studio.cli backup "$@"

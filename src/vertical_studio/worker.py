@@ -6,15 +6,19 @@ from .db import Database
 from .platform import PlatformAdapter
 from .schemas import ArtifactKind, Job, JobKind, ProjectState, SceneState
 from .services.comfy import GenerationError, Generator
+from .services.gpu import GpuCoordinator
+from .services.model_gateway import ModelUnavailable
 from .services.media import probe_media, sha256_file
 from .services.qa import QualityService
 from .services.renderer import Renderer
 
 class Worker:
     def __init__(self, db: Database, settings: Settings, generator: Generator,
-                 renderer: Renderer | None = None, qa: QualityService | None = None):
+                 renderer: Renderer | None = None, qa: QualityService | None = None,
+                 gpu: GpuCoordinator | None = None):
         self.db, self.settings, self.generator = db, settings, generator
         self.renderer, self.qa = renderer or Renderer(), qa or QualityService()
+        self.gpu = gpu or GpuCoordinator(generator, self.qa.model, simulation=True)
         self.owner, self._stop = f"{socket.gethostname()}:{id(self)}", threading.Event()
 
     def run_once(self) -> Job | None:
@@ -46,6 +50,8 @@ class Worker:
 
     def stop(self) -> None:
         self._stop.set(); self.generator.interrupt()
+        if self.qa.model is not None:
+            self.qa.model.unload()
 
     def _dir(self, job: Job, attempt_id: str) -> Path:
         path = self.settings.projects_dir / job.project_id / "scenes" / (job.scene_id or "project") / "attempts" / attempt_id
@@ -58,9 +64,10 @@ class Worker:
             job, "flux-klein-4b-v1", seed, generation_payload
         )
         try:
-            result = self.generator.generate_keyframes(
-                self._dir(job, attempt), generation_payload
-            )
+            with self.gpu.comfy(reset_models=False):
+                result = self.generator.generate_keyframes(
+                    self._dir(job, attempt), generation_payload
+                )
             for path in result.files:
                 tokens = path.stem.split("-")
                 candidate = int(tokens[1]) if len(tokens) > 2 and tokens[1].isdigit() else 1
@@ -90,7 +97,8 @@ class Worker:
         )
         directory = self._dir(job, attempt)
         try:
-            result = self.generator.generate_video(directory, generation_payload)
+            with self.gpu.comfy():
+                result = self.generator.generate_video(directory, generation_payload)
             video = result.files[0]
             artifact = self.db.add_artifact(job.project_id, ArtifactKind.VIDEO, video, sha256_file(video),
                 {**result.metadata, "workflow_profile": job.payload.get("workflow_profile")}, job.scene_id, attempt)
@@ -103,23 +111,32 @@ class Worker:
                 )
                 if artifact_id
             ]
-            report = self.qa.inspect_video(
-                video,
-                directory / "qa-frames",
-                context={
+            review_args = {
+                "context": {
                     "scene": scene.spec.model_dump(),
                     "character_bible": self.db.get_character_bible(job.project_id),
                     "criteria": [
-                        "prompt adherence",
-                        "identity and wardrobe",
-                        "environment",
-                        "anatomy and unwanted text",
-                        "temporal consistency",
+                        "prompt adherence", "identity and wardrobe", "environment",
+                        "anatomy and unwanted text", "temporal consistency",
                         "start/end keyframe continuity",
                     ],
                 },
-                reference_images=references,
-            )
+                "reference_images": references,
+            }
+            try:
+                if self.qa.enable_visual_review:
+                    with self.gpu.qwen():
+                        report = self.qa.inspect_video(
+                            video, directory / "qa-frames", **review_args
+                        )
+                else:
+                    report = self.qa.inspect_video(
+                        video, directory / "qa-frames", **review_args
+                    )
+            except ModelUnavailable as exc:
+                report = QualityService().inspect_video(video, directory / "qa-frames")
+                report.advisory_pass = False
+                report.reasons.append(f"visual review unavailable: {exc}")
             self.db.add_qa_report(job.project_id, job.scene_id, artifact.id, report.model_dump())
             self.db.select_artifacts(job.scene_id, video_id=artifact.id)
             self.db.clear_continuity_stale(job.scene_id)

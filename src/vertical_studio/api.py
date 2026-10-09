@@ -11,8 +11,10 @@ from pydantic import BaseModel
 from .config import Settings, load_settings
 from .db import Database
 from .orchestrator import Orchestrator
-from .schemas import ApprovalRequest, ArtifactSelection, ProjectCreate, RenderRequest, RetryRequest
+from .schemas import (ApprovalRequest, ArtifactSelection, PlanRequest, ProjectCreate,
+                      ProjectUpdate, RenderRequest, RetryRequest, SceneSpec)
 from .services.comfy import ComfyClient
+from .services.gpu import GpuCoordinator
 from .services.mock_comfy import MockComfyClient
 from .services.model_gateway import ModelGateway
 from .services.qa import QualityService
@@ -27,15 +29,31 @@ class Components:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.db = Database(settings.db_path)
-        self.model = ModelGateway(settings.llama_url, settings.qwen_model)
+        self.model = ModelGateway(
+            settings.llama_url,
+            settings.qwen_model,
+            managed=settings.manage_qwen and not settings.is_simulation,
+            executable=settings.llama_executable,
+            hf_repo=settings.qwen_hf_repo,
+            gpu_layers=settings.qwen_gpu_layers,
+            context_size=settings.qwen_context_size,
+            start_timeout=settings.qwen_start_timeout,
+            log_path=settings.data_dir / "logs" / "qwen.log",
+        )
         self.research = BraveResearchProvider(settings.brave_api_key)
         self.generator = MockComfyClient() if settings.is_simulation else ComfyClient(settings.comfy_url, settings.workflows_dir)
-        self.orchestrator = Orchestrator(self.db, settings, self.model, self.research)
+        self.gpu = GpuCoordinator(
+            self.generator, self.model, simulation=settings.is_simulation
+        )
+        self.orchestrator = Orchestrator(
+            self.db, settings, self.model, self.research, self.gpu
+        )
         self.worker = Worker(
             self.db, settings, self.generator,
             qa=QualityService(
                 self.model, enable_visual_review=not settings.is_simulation
             ),
+            gpu=self.gpu,
         )
         self.thread: threading.Thread | None = None
 
@@ -71,6 +89,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "mode": settings.execution_mode, "platform": settings.platform_mode,
             "generator": components.generator.health(), "model": components.model.health(),
             "data_dir": str(settings.data_dir), "real_generation_enabled": not settings.is_simulation,
+            "managed_qwen": settings.manage_qwen, "qwen_loaded": components.model.owned,
         }
 
     @app.get("/api/projects")
@@ -100,8 +119,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception as exc: fail(exc)
 
     @app.post("/api/projects/{project_id}/plan")
-    def plan(project_id: str):
-        try: return components.orchestrator.plan_project(project_id)
+    def plan(project_id: str, request: PlanRequest = PlanRequest()):
+        try: return components.orchestrator.plan_project(project_id, request)
+        except Exception as exc: fail(exc)
+
+    @app.patch("/api/projects/{project_id}")
+    def update_project(project_id: str, request: ProjectUpdate):
+        try: return components.orchestrator.update_project(project_id, request)
+        except Exception as exc: fail(exc)
+
+    @app.post("/api/projects/{project_id}/retry")
+    def retry_project(project_id: str):
+        try: return components.orchestrator.retry_project(project_id)
+        except Exception as exc: fail(exc)
+
+    @app.delete("/api/projects/{project_id}", status_code=204)
+    def delete_project(project_id: str):
+        try: components.orchestrator.delete_project(project_id)
+        except Exception as exc: fail(exc)
+
+    @app.patch("/api/scenes/{scene_id}")
+    def update_scene(scene_id: str, request: SceneSpec):
+        try: return components.orchestrator.update_scene(scene_id, request)
+        except Exception as exc: fail(exc)
+
+    @app.delete("/api/scenes/{scene_id}", status_code=204)
+    def delete_scene(scene_id: str):
+        try: components.orchestrator.delete_scene(scene_id)
         except Exception as exc: fail(exc)
 
     @app.post("/api/projects/{project_id}/storyboard-approval")

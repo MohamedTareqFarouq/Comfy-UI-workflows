@@ -4,7 +4,8 @@ const state={
   detail:null,
   detailSignature:null,
   historyOpen:false,
-  poll:null
+  poll:null,
+  runtime:null
 };
 
 const q=selector=>document.querySelector(selector);
@@ -217,6 +218,8 @@ function renderDetail(){
   }
   if(project.state==="storyboard_review"){
     actions.push('<button class="primary" data-action="approve-story">Approve storyboard</button>');
+    actions.push('<button data-action="regenerate-story">Regenerate storyboard</button>');
+    actions.push('<button data-action="edit-project">Edit project</button>');
   }
   if(project.state==="final_review"){
     actions.push('<button class="primary" data-action="render">Render final</button>');
@@ -226,6 +229,10 @@ function renderDetail(){
   }else if(!["complete","rendering"].includes(project.state)){
     actions.push('<button data-action="pause">Pause</button><button data-action="cancel">Cancel jobs</button>');
   }
+  if(!["references","scenes","rendering"].includes(project.state)){
+    actions.push('<button data-action="retry-project">Restart project</button>');
+  }
+  actions.push('<button class="danger" data-action="delete-project">Delete project</button>');
 
   const scenesHtml=scenes.map(scene=>{
     const sceneArtifacts=artifacts.filter(artifact=>artifact.scene_id===scene.id);
@@ -265,6 +272,10 @@ function renderDetail(){
     `:"";
 
     let controls="";
+    if(project.state==="storyboard_review"&&scene.state==="planned"){
+      controls=`<button data-edit-scene="${scene.id}">Edit scene</button>
+        <button class="danger" data-delete-scene="${scene.id}">Delete scene</button>`;
+    }
     if(scene.state==="keyframes_ready"){
       controls=`${pairs.map(pair=>`
         <button data-kf="${scene.id}" data-start="${pair.start.id}" data-end="${pair.end.id}">
@@ -296,7 +307,10 @@ function renderDetail(){
       <span class="badge ${project.state==="complete"?"ok":""}">${project.state.replaceAll("_"," ")}</span>
     </div>
     <div class="toolbar">${actions.join("")}</div>
-    <div class="notice">Simulation mode creates deterministic portrait fixtures. Real Flux/Wan execution remains disabled until explicitly configured and qualified. Queue: ${jobs.filter(job=>["queued","running"].includes(job.state)).length} active.</div>
+    <div class="notice">${project.execution_mode==="real"
+      ?"Real mode: Qwen and ComfyUI models are loaded one at a time to protect GPU memory."
+      :"Simulation mode creates deterministic portrait fixtures."}
+      Queue: ${jobs.filter(job=>["queued","running"].includes(job.state)).length} active.</div>
     ${renderOutput(artifacts,render_manifests)}
     <div class="section-title"><h2>Scenes</h2><span>${scenes.length} scenes</span></div>
     <div class="scene-grid">${scenesHtml||"<p>Plan the storyboard to create scenes.</p>"}</div>
@@ -311,19 +325,62 @@ function bindActions(){
   document.querySelectorAll("[data-retry-kf]").forEach(button=>button.onclick=()=>post(`/api/scenes/${button.dataset.retryKf}/retry-keyframes`,{}));
   document.querySelectorAll("[data-approve-video]").forEach(button=>button.onclick=()=>post(`/api/scenes/${button.dataset.approveVideo}/approval`,{approved:true,notes:""}));
   document.querySelectorAll("[data-retry-video]").forEach(button=>button.onclick=()=>post(`/api/scenes/${button.dataset.retryVideo}/retry-video`,{new_seed:true}));
+  document.querySelectorAll("[data-edit-scene]").forEach(button=>button.onclick=()=>editScene(button.dataset.editScene));
+  document.querySelectorAll("[data-delete-scene]").forEach(button=>button.onclick=()=>deleteScene(button.dataset.deleteScene));
   const history=q("#history-panel");
   if(history)history.ontoggle=()=>{state.historyOpen=history.open};
 }
 
-async function post(path,body){
+async function mutate(path,method,body=null){
   try{
-    await api(path,{method:"POST",body:JSON.stringify(body)});
-    toast("Action queued");
+    const options={method};
+    if(body!==null)options.body=JSON.stringify(body);
+    const result=await api(path,options);
+    toast("Saved");
     state.detailSignature=null;
-    await refreshDetail();
+    return result;
   }catch(error){
     toast(error.message);
+    throw error;
   }
+}
+
+async function post(path,body){
+  try{
+    const result=await mutate(path,"POST",body);
+    await refreshDetail();
+    return result;
+  }catch(_error){}
+}
+
+async function editScene(sceneId){
+  const scene=state.detail.scenes.find(item=>item.id===sceneId);
+  if(!scene)return;
+  const title=prompt("Scene title",scene.spec.title);
+  if(title===null)return;
+  const narrative=prompt("What happens in this scene?",scene.spec.narrative_purpose);
+  if(narrative===null)return;
+  const start=prompt("Start composition",scene.spec.start_composition);
+  if(start===null)return;
+  const end=prompt("End composition",scene.spec.end_composition);
+  if(end===null)return;
+  const motion=prompt("Motion",scene.spec.motion);
+  if(motion===null)return;
+  try{
+    await mutate(`/api/scenes/${sceneId}`,"PATCH",{
+      ...scene.spec,title,narrative_purpose:narrative,
+      start_composition:start,end_composition:end,motion
+    });
+    await refreshDetail();
+  }catch(_error){}
+}
+
+async function deleteScene(sceneId){
+  if(!confirm("Delete this scene? This cannot be undone."))return;
+  try{
+    await mutate(`/api/scenes/${sceneId}`,"DELETE");
+    await refreshDetail();
+  }catch(_error){}
 }
 
 async function approveKeyframes(button){
@@ -339,6 +396,49 @@ async function approveKeyframes(button){
 async function act(name){
   if(name==="plan")return post(`/api/projects/${state.current}/plan`,{});
   if(name==="approve-story")return post(`/api/projects/${state.current}/storyboard-approval`,{approved:true,notes:""});
+  if(name==="regenerate-story"){
+    const feedback=prompt("What should change in the regenerated storyboard?","");
+    if(feedback===null)return;
+    return post(`/api/projects/${state.current}/plan`,{feedback});
+  }
+  if(name==="edit-project"){
+    const project=state.detail.project;
+    const title=prompt("Project title",project.title);
+    if(title===null)return;
+    const idea=prompt("Story idea",project.idea);
+    if(idea===null)return;
+    const style=prompt("Visual style",project.visual_style);
+    if(style===null)return;
+    try{
+      await mutate(`/api/projects/${state.current}`,"PATCH",{
+        title,idea,visual_style:style
+      });
+      await refreshProjects();
+      await refreshDetail();
+    }catch(_error){}
+    return;
+  }
+  if(name==="retry-project"){
+    if(!confirm("Restart this project and remove its generated attempts?"))return;
+    try{
+      await mutate(`/api/projects/${state.current}/retry`,"POST",{});
+      await post(`/api/projects/${state.current}/plan`,{});
+      await refreshProjects();
+    }catch(_error){}
+    return;
+  }
+  if(name==="delete-project"){
+    if(!confirm("Permanently delete this project and its generated files?"))return;
+    try{
+      await mutate(`/api/projects/${state.current}`,"DELETE");
+      clearInterval(state.poll);
+      state.current=null;state.detail=null;state.detailSignature=null;
+      q("#project-view").hidden=true;q("#empty").hidden=false;
+      await refreshProjects();
+      if(state.projects[0])await openProject(state.projects[0].id);
+    }catch(_error){}
+    return;
+  }
   if(name==="render")return post(`/api/projects/${state.current}/render`,{});
   if(name==="pause")return post(`/api/projects/${state.current}/pause`,{});
   if(name==="resume")return post(`/api/projects/${state.current}/resume`,{});
@@ -377,7 +477,8 @@ q("#create-form").onsubmit=async event=>{
 (async()=>{
   try{
     const status=await api("/api/status");
-    q("#runtime").textContent=`${status.mode.toUpperCase()} / ${status.platform.toUpperCase()}`;
+    state.runtime=status;
+    q("#runtime").textContent=`${status.mode.toUpperCase()} / ${status.platform.toUpperCase()}${status.managed_qwen?" / AUTO GPU":""}`;
     await refreshProjects();
     if(state.projects[0])openProject(state.projects[0].id);
   }catch(error){

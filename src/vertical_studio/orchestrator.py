@@ -1,10 +1,13 @@
 from __future__ import annotations
-import hashlib, json, math
+import hashlib, json, math, shutil
+from pathlib import Path
 from typing import Any
 from .config import Settings
 from .db import Database
 from .schemas import (ApprovalRequest, ArtifactSelection, ExecutionMode, Job, JobKind, JobState,
- Project, ProjectCreate, ProjectState, RenderRequest, RetryRequest, Scene, SceneSpec, SceneState, Storyboard)
+ PlanRequest, Project, ProjectCreate, ProjectState, ProjectUpdate, RenderRequest, RetryRequest,
+ Scene, SceneSpec, SceneState, Storyboard)
+from .services.gpu import GpuCoordinator
 from .services.model_gateway import ModelGateway, ModelUnavailable
 from .services.research import BraveResearchProvider
 
@@ -12,14 +15,16 @@ def stable_key(*values: Any) -> str:
     return hashlib.sha256(json.dumps(values, sort_keys=True, default=str).encode()).hexdigest()
 
 class Orchestrator:
-    def __init__(self, db: Database, settings: Settings, model: ModelGateway, research: BraveResearchProvider):
+    def __init__(self, db: Database, settings: Settings, model: ModelGateway,
+                 research: BraveResearchProvider, gpu: GpuCoordinator):
         self.db, self.settings, self.model, self.research = db, settings, model, research
+        self.gpu = gpu
 
     def create_project(self, request: ProjectCreate) -> Project:
         mode = ExecutionMode.SIMULATION if self.settings.is_simulation else ExecutionMode.REAL
         return self.db.create_project(request, mode)
 
-    def plan_project(self, project_id: str) -> Storyboard:
+    def plan_project(self, project_id: str, request: PlanRequest | None = None) -> Storyboard:
         project = self.db.get_project(project_id)
         research_context = ""
         if project.state == ProjectState.DRAFT and project.research_required:
@@ -46,21 +51,40 @@ class Orchestrator:
             project = self.db.transition_project(project_id, ProjectState.PLANNING, "revision")
         if project.state != ProjectState.PLANNING:
             raise ValueError(f"cannot plan from {project.state}")
-        storyboard = self._storyboard(project, research_context)
+        storyboard = self._storyboard(
+            project, research_context, (request or PlanRequest()).feedback
+        )
         self.db.replace_storyboard(project_id, storyboard.scenes, storyboard.character_bible)
         self.db.transition_project(project_id, ProjectState.STORYBOARD_REVIEW)
         return storyboard
 
-    def _storyboard(self, project: Project, research_context: str) -> Storyboard:
-        if not self.settings.is_simulation and self.model.health().get("available"):
+    def _storyboard(
+        self, project: Project, research_context: str, feedback: str = ""
+    ) -> Storyboard:
+        if not self.settings.is_simulation:
             try:
-                return self.model.generate_structured(
-                    Storyboard,
-                    system="Create a coherent vertical 9:16 storyboard of 3-10 scenes. Preserve identity and safe framing.",
-                    context=json.dumps({"project": project.model_dump(), "research": research_context}, default=str),
-                )
+                with self.gpu.qwen():
+                    return self.model.generate_structured(
+                        Storyboard,
+                        system=(
+                            "Create a coherent vertical 9:16 storyboard of 3-10 distinct "
+                            "scenes. Each scene must advance a different story beat. Scene "
+                            "durations must sum exactly to the requested project duration and each "
+                            "must be between 1 and 6 seconds. Preserve identity, continuity and "
+                            "safe framing. Apply revision feedback. Return JSON only."
+                        ),
+                        context=json.dumps(
+                            {
+                                "project": project.model_dump(),
+                                "research": research_context,
+                                "revision_feedback": feedback,
+                            },
+                            default=str,
+                        ),
+                    )
             except ModelUnavailable:
-                raise
+                if self.model.managed:
+                    raise
         count = max(3, min(10, math.ceil(project.duration_seconds / 3)))
         duration = project.duration_seconds / count
         scenes = [SceneSpec(
@@ -79,6 +103,49 @@ class Orchestrator:
             character_bible={"style": project.visual_style, "identity_rule": "Preserve face, silhouette, wardrobe, palette and proportions."},
             scenes=scenes,
         )
+
+    def update_project(self, project_id: str, request: ProjectUpdate) -> Project:
+        project = self.db.get_project(project_id)
+        if project.state not in {
+            ProjectState.DRAFT, ProjectState.PLANNING, ProjectState.STORYBOARD_REVIEW
+        }:
+            raise ValueError("project details can only be edited before generation")
+        return self.db.update_project(project_id, request)
+
+    def update_scene(self, scene_id: str, spec: SceneSpec) -> Scene:
+        scene = self.db.get_scene(scene_id)
+        project = self.db.get_project(scene.project_id)
+        if project.state != ProjectState.STORYBOARD_REVIEW or scene.state != SceneState.PLANNED:
+            raise ValueError("scenes can only be edited during storyboard review")
+        others = [item.spec for item in self.db.list_scenes(project.id) if item.id != scene_id]
+        Storyboard(summary="edited", character_bible={}, scenes=[*others, spec])
+        return self.db.update_scene_spec(scene_id, spec)
+
+    def delete_scene(self, scene_id: str) -> None:
+        scene = self.db.get_scene(scene_id)
+        project = self.db.get_project(scene.project_id)
+        if project.state != ProjectState.STORYBOARD_REVIEW or scene.state != SceneState.PLANNED:
+            raise ValueError("scenes can only be deleted during storyboard review")
+        self.db.delete_scene(scene_id)
+
+    def retry_project(self, project_id: str) -> Project:
+        self.db.reset_project(project_id)
+        project_dir = self.settings.projects_dir / project_id
+        if project_dir.exists():
+            shutil.rmtree(project_dir)
+        export = self.settings.export_dir / f"{project_id}.mp4"
+        if export.exists():
+            export.unlink()
+        return self.db.get_project(project_id)
+
+    def delete_project(self, project_id: str) -> None:
+        self.db.delete_project(project_id)
+        project_dir = self.settings.projects_dir / project_id
+        if project_dir.exists():
+            shutil.rmtree(project_dir)
+        export = self.settings.export_dir / f"{project_id}.mp4"
+        if export.exists():
+            export.unlink()
 
     def approve_storyboard(self, project_id: str, request: ApprovalRequest) -> list[Job]:
         if self.db.get_project(project_id).state != ProjectState.STORYBOARD_REVIEW:
@@ -115,9 +182,13 @@ class Orchestrator:
         scene = self.db.transition_scene(scene.id, SceneState.KEYFRAMES_APPROVED)
         scenes = self.db.list_scenes(scene.project_id)
         if all(s.state == SceneState.KEYFRAMES_APPROVED for s in scenes):
+            # This is the stage boundary: keep Flux resident through all image
+            # generation/review, then free it once before any Wan job is queued.
+            self.gpu.release_comfy()
             if self.db.get_project(scene.project_id).state == ProjectState.CONTACT_SHEET_REVIEW:
                 self.db.transition_project(scene.project_id, ProjectState.SCENES)
-            for item in scenes: self.queue_video(item.id)
+            for item in scenes:
+                self.queue_video(item.id)
         return scene
 
     def queue_video(self, scene_id: str, retry: RetryRequest | None = None) -> Job:

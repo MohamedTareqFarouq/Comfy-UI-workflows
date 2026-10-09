@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 WorkingDirectory=%h/vertical-video-studio
 Environment=VVS_EXECUTION_MODE=simulation
-ExecStart=%h/vertical-video-studio/.venv/bin/vertical-studio serve
+ExecStart=%h/vertical-video-studio/start.sh
 Restart=on-failure
 RestartSec=3
 

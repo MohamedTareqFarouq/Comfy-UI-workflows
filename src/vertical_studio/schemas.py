@@ -75,6 +75,17 @@ class ProjectCreate(BaseModel):
     source_urls: list[str] = Field(default_factory=list)
 
 
+class ProjectUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    idea: str | None = Field(default=None, min_length=3, max_length=4000)
+    duration_seconds: int | None = Field(default=None, ge=10, le=30)
+    visual_style: str | None = Field(default=None, min_length=1, max_length=500)
+
+
+class PlanRequest(BaseModel):
+    feedback: str = Field(default="", max_length=4000)
+
+
 class Project(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str

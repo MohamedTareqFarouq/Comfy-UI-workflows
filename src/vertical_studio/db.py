@@ -19,6 +19,7 @@ from .schemas import (
     Project,
     ProjectCreate,
     ProjectState,
+    ProjectUpdate,
     Scene,
     SceneSpec,
     SceneState,
@@ -244,6 +245,62 @@ class Database:
             rows = connection.execute("SELECT * FROM projects ORDER BY updated_at DESC").fetchall()
         return [Project(**dict(row)) for row in rows]
 
+    def update_project(self, project_id: str, request: ProjectUpdate) -> Project:
+        values = request.model_dump(exclude_none=True)
+        if not values:
+            return self.get_project(project_id)
+        allowed = {"title", "idea", "duration_seconds", "visual_style"}
+        if set(values) - allowed:
+            raise ValueError("unsupported project field")
+        with self.transaction() as connection:
+            if not connection.execute(
+                "SELECT 1 FROM projects WHERE id=?", (project_id,)
+            ).fetchone():
+                raise KeyError(f"project {project_id} not found")
+            fields = [f"{name}=?" for name in values]
+            connection.execute(
+                f"UPDATE projects SET {', '.join(fields)}, updated_at=? WHERE id=?",
+                [*values.values(), utc_now(), project_id],
+            )
+            self.add_event(connection, project_id, "project.updated", values)
+        return self.get_project(project_id)
+
+    def has_active_jobs(self, project_id: str) -> bool:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM jobs WHERE project_id=? AND state IN (?,?) LIMIT 1",
+                (project_id, JobState.QUEUED, JobState.RUNNING),
+            ).fetchone()
+        return row is not None
+
+    def reset_project(self, project_id: str) -> Project:
+        if self.has_active_jobs(project_id):
+            raise ValueError("cancel active jobs before restarting the project")
+        with self.transaction() as connection:
+            if not connection.execute(
+                "SELECT 1 FROM projects WHERE id=?", (project_id,)
+            ).fetchone():
+                raise KeyError(f"project {project_id} not found")
+            for table in (
+                "render_manifests", "qa_reports", "approvals", "artifacts",
+                "jobs", "scenes", "character_bibles",
+            ):
+                connection.execute(f"DELETE FROM {table} WHERE project_id=?", (project_id,))
+            connection.execute(
+                "UPDATE projects SET state=?, resume_state=NULL, updated_at=? WHERE id=?",
+                (ProjectState.DRAFT, utc_now(), project_id),
+            )
+            self.add_event(connection, project_id, "project.restarted")
+        return self.get_project(project_id)
+
+    def delete_project(self, project_id: str) -> None:
+        if self.has_active_jobs(project_id):
+            raise ValueError("cancel active jobs before deleting the project")
+        with self.transaction() as connection:
+            cursor = connection.execute("DELETE FROM projects WHERE id=?", (project_id,))
+            if cursor.rowcount == 0:
+                raise KeyError(f"project {project_id} not found")
+
     def transition_project(self, project_id: str, target: ProjectState, reason: str = "") -> Project:
         with self.transaction() as connection:
             row = connection.execute("SELECT state FROM projects WHERE id=?", (project_id,)).fetchone()
@@ -301,6 +358,48 @@ class Database:
         if not row:
             raise KeyError(f"scene {scene_id} not found")
         return self._scene(row)
+
+    def update_scene_spec(self, scene_id: str, spec: SceneSpec) -> Scene:
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT project_id FROM scenes WHERE id=?", (scene_id,)
+            ).fetchone()
+            if not row:
+                raise KeyError(f"scene {scene_id} not found")
+            connection.execute(
+                "UPDATE scenes SET spec_json=?, revision=revision+1, updated_at=? WHERE id=?",
+                (spec.model_dump_json(), utc_now(), scene_id),
+            )
+            self.add_event(
+                connection, row["project_id"], "scene.updated", spec.model_dump(), scene_id
+            )
+        return self.get_scene(scene_id)
+
+    def delete_scene(self, scene_id: str) -> None:
+        scene = self.get_scene(scene_id)
+        with self.transaction() as connection:
+            count = connection.execute(
+                "SELECT COUNT(*) FROM scenes WHERE project_id=?", (scene.project_id,)
+            ).fetchone()[0]
+            if count <= 3:
+                raise ValueError("a storyboard must keep at least three scenes")
+            connection.execute("DELETE FROM scenes WHERE id=?", (scene_id,))
+            connection.execute(
+                "UPDATE scenes SET position=-position WHERE project_id=?",
+                (scene.project_id,),
+            )
+            rows = connection.execute(
+                "SELECT id FROM scenes WHERE project_id=? ORDER BY position DESC",
+                (scene.project_id,),
+            ).fetchall()
+            for position, row in enumerate(rows, 1):
+                connection.execute(
+                    "UPDATE scenes SET position=?, updated_at=? WHERE id=?",
+                    (position, utc_now(), row["id"]),
+                )
+            self.add_event(
+                connection, scene.project_id, "scene.deleted", {"scene_id": scene_id}
+            )
 
     @staticmethod
     def _scene(row: sqlite3.Row) -> Scene:

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import threading
+import time
+from pathlib import Path
 from typing import Any, TypeVar
 
 import httpx
@@ -16,10 +20,33 @@ class ModelUnavailable(RuntimeError):
 class ModelGateway:
     """Narrow, non-agentic interface to a local OpenAI-compatible llama.cpp server."""
 
-    def __init__(self, base_url: str, model: str, timeout: float = 180.0):
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        timeout: float = 180.0,
+        *,
+        managed: bool = False,
+        executable: str = "llama",
+        hf_repo: str = "Qwen/Qwen3-VL-4B-Instruct-GGUF:Q4_K_M",
+        gpu_layers: int = 99,
+        context_size: int = 8192,
+        start_timeout: int = 300,
+        log_path: Path | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
+        self.managed = managed
+        self.executable = executable
+        self.hf_repo = hf_repo
+        self.gpu_layers = gpu_layers
+        self.context_size = context_size
+        self.start_timeout = start_timeout
+        self.log_path = log_path
+        self._process: subprocess.Popen[bytes] | None = None
+        self._lock = threading.RLock()
+        self._log_stream: Any = None
 
     def health(self) -> dict[str, Any]:
         try:
@@ -27,6 +54,72 @@ class ModelGateway:
             return {"available": response.is_success, "status": response.status_code}
         except httpx.HTTPError as exc:
             return {"available": False, "error": str(exc)}
+
+    @property
+    def owned(self) -> bool:
+        return self._process is not None and self._process.poll() is None
+
+    def ensure_available(self) -> None:
+        with self._lock:
+            if self.health().get("available"):
+                if self.managed and not self.owned:
+                    raise ModelUnavailable(
+                        "Qwen is already running externally; stop it so Vertical Studio "
+                        "can manage GPU loading and unloading"
+                    )
+                return
+            if not self.managed:
+                raise ModelUnavailable(f"Qwen is unavailable at {self.base_url}")
+            if self._process is not None and self._process.poll() is not None:
+                self._close_log()
+                self._process = None
+            command = [
+                self.executable,
+                "serve",
+                "-hf",
+                self.hf_repo,
+                "--alias",
+                self.model,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                self.base_url.rsplit(":", 1)[-1],
+                "--n-gpu-layers",
+                str(self.gpu_layers),
+                "--ctx-size",
+                str(self.context_size),
+                "--parallel",
+                "1",
+            ]
+            if self.log_path:
+                self.log_path.parent.mkdir(parents=True, exist_ok=True)
+                self._log_stream = self.log_path.open("ab")
+            try:
+                self._process = subprocess.Popen(
+                    command,
+                    stdout=self._log_stream or subprocess.DEVNULL,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            except OSError as exc:
+                self._close_log()
+                raise ModelUnavailable(f"could not start managed Qwen: {exc}") from exc
+            deadline = time.monotonic() + self.start_timeout
+            while time.monotonic() < deadline:
+                if self._process.poll() is not None:
+                    code = self._process.returncode
+                    self._process = None
+                    self._close_log()
+                    raise ModelUnavailable(
+                        f"managed Qwen exited during startup with code {code}"
+                    )
+                if self.health().get("available"):
+                    return
+                time.sleep(0.5)
+            self.unload()
+            raise ModelUnavailable(
+                "managed Qwen did not become healthy before the startup timeout"
+            )
 
     def generate_structured(
         self,
@@ -36,6 +129,7 @@ class ModelGateway:
         context: str,
         max_tokens: int = 4096,
     ) -> T:
+        self.ensure_available()
         schema = output_type.model_json_schema()
         payload = {
             "model": self.model,
@@ -47,15 +141,67 @@ class ModelGateway:
             "max_tokens": max_tokens,
             "response_format": {"type": "json_schema", "schema": schema},
         }
+        last_error: Exception | None = None
+        last_content = ""
+        for attempt in range(2):
+            try:
+                response = httpx.post(
+                    f"{self.base_url}/v1/chat/completions",
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                last_content = response.json()["choices"][0]["message"]["content"]
+                return self._parse_structured(output_type, last_content)
+            except (httpx.HTTPError, KeyError, ValueError, json.JSONDecodeError) as exc:
+                last_error = exc
+                if attempt == 0 and last_content:
+                    payload["messages"].extend(
+                        [
+                            {"role": "assistant", "content": last_content},
+                            {
+                                "role": "user",
+                                "content": (
+                                    "The response failed schema validation. Return only corrected "
+                                    "JSON matching the supplied schema. Error: " + str(exc)[:1200]
+                                ),
+                            },
+                        ]
+                    )
+                    payload["temperature"] = 0
+                    continue
+                break
+        self._record_invalid_response(last_content, last_error)
+        raise ModelUnavailable(f"invalid structured model response: {last_error}") from last_error
+
+    @staticmethod
+    def _parse_structured(output_type: type[T], content: str) -> T:
+        value = content.strip()
+        if value.startswith("```"):
+            lines = value.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            value = "\n".join(lines).strip()
         try:
-            response = httpx.post(
-                f"{self.base_url}/v1/chat/completions", json=payload, timeout=self.timeout
-            )
-            response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
-            return output_type.model_validate(json.loads(content))
-        except (httpx.HTTPError, KeyError, ValueError, json.JSONDecodeError) as exc:
-            raise ModelUnavailable(str(exc)) from exc
+            return output_type.model_validate_json(value)
+        except ValueError:
+            start, end = value.find("{"), value.rfind("}")
+            if start < 0 or end <= start:
+                raise
+            return output_type.model_validate(json.loads(value[start : end + 1]))
+
+    def _record_invalid_response(
+        self, content: str, error: Exception | None
+    ) -> None:
+        if not self.log_path:
+            return
+        target = self.log_path.with_name("qwen-invalid-response.json")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps({"error": str(error), "content": content}, indent=2)
+        )
 
     def analyze_images(
         self,
@@ -65,6 +211,7 @@ class ModelGateway:
         prompt: str,
         image_urls: list[str],
     ) -> T:
+        self.ensure_available()
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         content.extend(
             {"type": "image_url", "image_url": {"url": image_url}}
@@ -91,6 +238,20 @@ class ModelGateway:
             raise ModelUnavailable(str(exc)) from exc
 
     def unload(self) -> None:
-        # llama.cpp may not expose model unloading in all builds. Stopping the
-        # supervised process is the authoritative unload operation.
-        return None
+        with self._lock:
+            if not self.owned:
+                return
+            assert self._process is not None
+            self._process.terminate()
+            try:
+                self._process.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+                self._process.wait(timeout=5)
+            self._process = None
+            self._close_log()
+
+    def _close_log(self) -> None:
+        if self._log_stream is not None:
+            self._log_stream.close()
+            self._log_stream = None

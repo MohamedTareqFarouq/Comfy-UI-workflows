@@ -268,7 +268,6 @@ class ComfyClient:
                 shutil.move(str(source), target)
                 all_files.append(target)
                 prompts.append({"candidate": candidate, "role": role, "prompt_id": result.metadata["prompt_id"]})
-                self.free_memory()
         return GenerationResult(files=all_files, metadata={"runs": prompts})
 
     def generate_video(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult:

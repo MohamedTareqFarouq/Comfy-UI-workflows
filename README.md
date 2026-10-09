@@ -37,7 +37,7 @@ The first three commands normally used after cloning are therefore:
 
 | Command | Purpose |
 | --- | --- |
-| `./scripts/setup.sh` | Create `.venv` and install the application and test dependencies. |
+| `./scripts/setup.sh` | Install into Lightning's active environment or create `.venv` on a laptop. |
 | `./run-tests.sh` | Compile Python, check the PWA, run all tests and run simulation diagnostics. |
 | `./start.sh` | Start the local web application in safe simulation mode. |
 
@@ -73,6 +73,34 @@ Use a different wheel destination when needed:
 
 `requirements.lock` records the tested dependency versions. `pyproject.toml` remains the authoritative project dependency declaration.
 
+## Lightning AI and laptop runtimes
+
+The scripts automatically use Lightning's active Conda environment when the checkout
+is under a Lightning Studio. On a normal Linux/WSL laptop they use `.venv`.
+
+Lightning AI (one environment):
+
+```bash
+./scripts/setup.sh --active-env
+./run-tests.sh
+./scripts/qualify.sh smoke
+./scripts/start-lightning.sh
+```
+
+Normal Linux/WSL laptop:
+
+```bash
+./scripts/setup.sh
+./run-tests.sh
+./start.sh --simulation
+# After real workflows are qualified:
+./start.sh --real --managed-qwen
+```
+
+Use `VVS_PYTHON=/path/to/python` or `VVS_USE_ACTIVE_ENV=1` to override automatic
+runtime selection. `start.sh` also accepts `--managed-qwen`, `--no-managed-qwen`,
+`--real`, and `--simulation` before the normal server arguments.
+
 ## Development workflow
 
 After changing code:
@@ -84,7 +112,7 @@ After changing code:
 For a headless end-to-end simulation:
 
 ```bash
-VVS_DATA_DIR=/tmp/vvs-demo .venv/bin/vertical-studio demo
+VVS_DATA_DIR=/tmp/vvs-demo VVS_USE_ACTIVE_ENV=1 python3 -m vertical_studio.cli demo
 ```
 
 The automated suite covers complete 10-, 20- and 30-second projects, portrait media, API/PWA contracts, run history, final outputs, duplicate prevention, scene retry isolation, pause/cancel behavior, lease recovery, research persistence, malformed workflow rejection, simulated failures and guarded qualification.
@@ -205,6 +233,21 @@ rsync -av "$HOME/.local/share/vertical-video-studio/" \
   USER@NEW_MACHINE:~/.local/share/vertical-video-studio/
 ```
 
+## Automatic GPU sharing with Qwen
+
+On a single 16 GB GPU, Vertical Studio can own the llama.cpp process and load Qwen
+only for storyboard planning and visual review. ComfyUI models are freed before Qwen
+starts; Qwen is stopped before Flux or Wan runs.
+
+```bash
+export VVS_MANAGE_QWEN=true
+export VVS_LLAMA_EXECUTABLE=llama
+export VVS_QWEN_GPU_LAYERS=99
+```
+
+Do not start a separate llama.cpp server when managed mode is enabled. Logs are saved
+under `$VVS_DATA_DIR/logs/`.
+
 ## Real ComfyUI setup and qualification
 
 The original repository workflows are ComfyUI UI graphs. Real mode deliberately rejects them until they are exported in API format.
@@ -217,13 +260,13 @@ The original repository workflows are ComfyUI UI graphs. Real mode deliberately 
 6. Copy `workflow_maps.example.json` to the ignored `workflow_maps.json` and enter exact node IDs.
 7. Copy `qualification_payloads.example.json` to the ignored `qualification_payloads.json`.
 8. Populate and verify hashes in [config/models.json](config/models.json).
-9. Run llama.cpp with Qwen on CPU and ComfyUI on the local endpoints.
+9. Start ComfyUI on the configured local endpoint. Managed mode starts Qwen on the GPU only when planning needs it.
 10. Run qualification explicitly.
 
 ```bash
-.venv/bin/vertical-studio qualify diagnostics
-VVS_EXECUTION_MODE=real .venv/bin/vertical-studio qualify smoke --confirm-real-generation
-VVS_EXECUTION_MODE=real .venv/bin/vertical-studio qualify full --confirm-real-generation
+./scripts/qualify.sh diagnostics
+./scripts/qualify.sh smoke
+./scripts/qualify.sh full
 ```
 
 Wan candidates are tested in this order:
