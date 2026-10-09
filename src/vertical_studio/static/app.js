@@ -5,7 +5,8 @@ const state={
   detailSignature:null,
   historyOpen:false,
   poll:null,
-  runtime:null
+  runtime:null,
+  operation:null
 };
 
 const q=selector=>document.querySelector(selector);
@@ -41,14 +42,114 @@ function when(value){
   return new Date(value).toLocaleString();
 }
 
+const jobLabels={
+  keyframe:"Generating scene keyframes with Flux",
+  video:"Generating scene videos with Wan",
+  qa:"Checking generated media",
+  render:"Rendering the final video"
+};
+
+function projectListActivity(project){
+  const map={
+    draft:["ready","Ready"],
+    research_needed:["waiting","Needs research"],
+    planning:["working","Planning"],
+    storyboard_review:["waiting","Awaiting approval"],
+    references:["working","Generating keyframes"],
+    contact_sheet_review:["waiting","Awaiting keyframes"],
+    scenes:["working","Generating scenes"],
+    final_review:["waiting","Awaiting final review"],
+    rendering:["working","Rendering"],
+    complete:["finished","Finished"],
+    failed:["error","Errored"],
+    paused:["stopped","Stopped"]
+  };
+  const [tone,label]=map[project.state]||["ready",project.state.replaceAll("_"," ")];
+  return {tone,label};
+}
+
+function projectActivity(detail){
+  if(state.operation)return state.operation;
+  const {project,jobs=[],scenes=[]}=detail;
+  const running=[...jobs].reverse().find(job=>job.state==="running");
+  if(running){
+    return {tone:"working",title:"Working",detail:jobLabels[running.kind]||`Running ${running.kind}`};
+  }
+  const queued=jobs.filter(job=>job.state==="queued");
+  if(queued.length){
+    const next=queued[0];
+    return {
+      tone:"working",title:"Working",
+      detail:`${jobLabels[next.kind]||`Queued ${next.kind}`} · ${queued.length} queued`
+    };
+  }
+  const latest=jobs[jobs.length-1];
+  const failedScene=scenes.find(scene=>scene.state==="failed");
+  if(project.state==="failed"||failedScene||latest?.state==="failed"){
+    const failure=[...jobs].reverse().find(job=>job.state==="failed");
+    return {
+      tone:"error",title:"Errored",
+      detail:failure?.error_message||failure?.error_code||
+        (failedScene?`${failedScene.spec.title} failed`:`Project failed`)
+    };
+  }
+  const map={
+    draft:["ready","Ready","Ready to plan the storyboard"],
+    research_needed:["waiting","Waiting","Research or source material is required"],
+    planning:["stopped","Stopped","Planning did not finish; press Plan storyboard to retry"],
+    storyboard_review:["waiting","Waiting for you","Review, edit, regenerate, or approve the storyboard"],
+    references:["working","Working","Preparing scene keyframes"],
+    contact_sheet_review:["waiting","Waiting for you","Approve a keyframe pair for every scene"],
+    scenes:["waiting","Waiting for you","Review and approve the generated scene videos"],
+    final_review:["waiting","Waiting for you","All scenes are approved; render the final video"],
+    rendering:["working","Working","Rendering the final video"],
+    complete:["finished","Finished","The final video is ready"],
+    paused:["stopped","Stopped","The project is paused; resume it when ready"]
+  };
+  const [tone,title,message]=map[project.state]||["ready","Ready",project.state.replaceAll("_"," ")];
+  return {tone,title,detail:message};
+}
+
+function operationLabel(path,method){
+  if(path.endsWith("/plan"))return "Planning storyboard with Qwen";
+  if(path.includes("storyboard-approval"))return "Starting keyframe generation";
+  if(path.includes("retry-keyframes"))return "Regenerating keyframes with Flux";
+  if(path.includes("keyframe-approval"))return "Saving keyframe approval";
+  if(path.includes("retry-video"))return "Regenerating the scene with Wan";
+  if(path.endsWith("/render"))return "Starting the final render";
+  if(path.endsWith("/pause"))return "Pausing the project";
+  if(path.endsWith("/resume"))return "Resuming the project";
+  if(path.endsWith("/cancel"))return "Stopping queued work";
+  if(method==="DELETE")return "Removing the selected item";
+  return "Saving changes";
+}
+
+function renderActivityIndicator(){
+  const panel=q("#activity-panel");
+  if(!panel||!state.detail)return;
+  const activity=projectActivity(state.detail);
+  panel.className=`activity-panel ${activity.tone}`;
+  panel.innerHTML=`
+    <span class="activity-dot" aria-hidden="true"></span>
+    <div><b>${esc(activity.title)}</b><span>${esc(activity.detail)}</span></div>
+  `;
+  panel.setAttribute("aria-label",`${activity.title}: ${activity.detail}`);
+  document.querySelectorAll("#project-view button").forEach(
+    button=>button.disabled=Boolean(state.operation&&state.operation.tone==="working")
+  );
+}
+
 async function refreshProjects(){
   state.projects=await api("/api/projects");
-  q("#projects").innerHTML=state.projects.map(project=>`
-    <button class="project-link ${project.id===state.current?"active":""}" data-project="${project.id}">
-      <b>${esc(project.title)}</b><br>
-      <small>${project.state}</small>
-    </button>
-  `).join("");
+  q("#projects").innerHTML=state.projects.map(project=>{
+    const activity=projectListActivity(project);
+    return `
+      <button class="project-link ${project.id===state.current?"active":""}" data-project="${project.id}">
+        <b>${esc(project.title)}</b>
+        <small class="project-state ${activity.tone}"><span></span>${esc(activity.label)}</small>
+      </button>
+    `;
+  }).join("");
   document.querySelectorAll("[data-project]").forEach(
     button=>button.onclick=()=>openProject(button.dataset.project)
   );
@@ -58,6 +159,7 @@ async function openProject(id){
   state.current=id;
   state.detailSignature=null;
   state.historyOpen=false;
+  state.operation=null;
   await refreshProjects();
   await refreshDetail();
   clearInterval(state.poll);
@@ -306,6 +408,7 @@ function renderDetail(){
       <div><span class="eyebrow">9:16 / ${project.duration_seconds} SECONDS</span><h2>${esc(project.title)}</h2><p>${esc(project.idea)}</p></div>
       <span class="badge ${project.state==="complete"?"ok":""}">${project.state.replaceAll("_"," ")}</span>
     </div>
+    <div id="activity-panel" class="activity-panel" role="status" aria-live="polite"></div>
     <div class="toolbar">${actions.join("")}</div>
     <div class="notice">${project.execution_mode==="real"
       ?"Real mode: Qwen and ComfyUI models are loaded one at a time to protect GPU memory."
@@ -317,6 +420,7 @@ function renderDetail(){
     ${renderProjectHistory(jobs,attempts,events,approvals)}
   `;
   bindActions();
+  renderActivityIndicator();
 }
 
 function bindActions(){
@@ -332,14 +436,20 @@ function bindActions(){
 }
 
 async function mutate(path,method,body=null){
+  state.operation={tone:"working",title:"Working",detail:operationLabel(path,method)};
+  renderActivityIndicator();
   try{
     const options={method};
     if(body!==null)options.body=JSON.stringify(body);
     const result=await api(path,options);
     toast("Saved");
+    state.operation=null;
     state.detailSignature=null;
+    renderActivityIndicator();
     return result;
   }catch(error){
+    state.operation={tone:"error",title:"Errored",detail:error.message};
+    renderActivityIndicator();
     toast(error.message);
     throw error;
   }
@@ -465,10 +575,9 @@ q("#create-form").onsubmit=async event=>{
     });
     q("#create-dialog").close();
     event.target.reset();
-    state.current=project.id;
+    await openProject(project.id);
     await post(`/api/projects/${project.id}/plan`,{});
     await refreshProjects();
-    await openProject(project.id);
   }catch(error){
     toast(error.message);
   }

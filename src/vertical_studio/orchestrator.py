@@ -71,7 +71,13 @@ class Orchestrator:
                             "scenes. Each scene must advance a different story beat. Scene "
                             "durations must sum exactly to the requested project duration and each "
                             "must be between 1 and 6 seconds. Preserve identity, continuity and "
-                            "safe framing. Apply revision feedback. Return JSON only."
+                            "safe framing. The top-level keys are summary, character_bible, and "
+                            "scenes; never use a storyboard wrapper. Every scene uses title, "
+                            "narrative_purpose, duration_seconds, start_composition, "
+                            "end_composition, and motion; never substitute scene, duration, "
+                            "description, or beat. For every scene, describe both its opening keyframe in "
+                            "start_composition and its closing keyframe in end_composition, plus "
+                            "the motion connecting them. Apply revision feedback. Return JSON only."
                         ),
                         context=json.dumps(
                             {

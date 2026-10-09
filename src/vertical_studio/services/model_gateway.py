@@ -131,10 +131,18 @@ class ModelGateway:
     ) -> T:
         self.ensure_available()
         schema = output_type.model_json_schema()
+        schema_text = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+        system_with_schema = (
+            system.rstrip()
+            + "\n\nYou MUST return exactly one JSON object that validates against the "
+            "JSON Schema below. Use the schema's field names exactly; do not invent "
+            "wrappers or rename fields. Return JSON only, without Markdown.\n"
+            + schema_text
+        )
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": system},
+                {"role": "system", "content": system_with_schema},
                 {"role": "user", "content": context},
             ],
             "temperature": 0.2,
@@ -162,8 +170,12 @@ class ModelGateway:
                             {
                                 "role": "user",
                                 "content": (
-                                    "The response failed schema validation. Return only corrected "
-                                    "JSON matching the supplied schema. Error: " + str(exc)[:1200]
+                                    "Your previous JSON failed validation. Return a completely "
+                                    "corrected JSON object only. Use the exact field names in this "
+                                    "JSON Schema and do not add a wrapper object:\n"
+                                    + schema_text
+                                    + "\nValidation error:\n"
+                                    + str(exc)[:1200]
                                 ),
                             },
                         ]
@@ -212,7 +224,15 @@ class ModelGateway:
         image_urls: list[str],
     ) -> T:
         self.ensure_available()
-        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        schema = output_type.model_json_schema()
+        schema_text = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+        constrained_prompt = (
+            prompt.rstrip()
+            + "\n\nReturn exactly one JSON object using the schema's field names. "
+            "Do not add a wrapper or Markdown. Exact JSON Schema:\n"
+            + schema_text
+        )
+        content: list[dict[str, Any]] = [{"type": "text", "text": constrained_prompt}]
         content.extend(
             {"type": "image_url", "image_url": {"url": image_url}}
             for image_url in image_urls
@@ -225,7 +245,7 @@ class ModelGateway:
             ],
             "temperature": 0.1,
             "max_tokens": 2048,
-            "response_format": {"type": "json_schema", "schema": output_type.model_json_schema()},
+            "response_format": {"type": "json_schema", "schema": schema},
         }
         try:
             response = httpx.post(

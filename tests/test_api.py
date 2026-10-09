@@ -11,6 +11,10 @@ def test_pwa_and_project_api_contract(components) -> None:
         page = client.get("/")
         assert page.status_code == 200
         assert "Vertical Video Studio" in page.text
+        script = client.get("/app.js")
+        assert script.status_code == 200
+        assert "projectActivity" in script.text
+        assert "Planning storyboard with Qwen" in script.text
 
         created = client.post(
             "/api/projects",
