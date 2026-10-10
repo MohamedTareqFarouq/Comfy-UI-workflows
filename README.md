@@ -233,6 +233,29 @@ rsync -av "$HOME/.local/share/vertical-video-studio/" \
   USER@NEW_MACHINE:~/.local/share/vertical-video-studio/
 ```
 
+## Continuity-aware keyframe chains
+
+Qwen marks each storyboard scene with a continuity group and decides whether the
+project needs a character sheet. After storyboard approval, the image stage is
+deterministic:
+
+1. Generate the optional character sheet with Flux T2I.
+2. Generate the first frame of each continuity group with Flux T2I.
+3. Generate every connected end frame with Flux Edit, using the immediately
+   previous frame and the character sheet when required.
+4. Reuse each exact end-frame file as the next connected scene's start frame.
+5. Wait until all keyframe pairs are approved, unload Flux, then queue Wan for
+   `F1 -> F2`, `F2 -> F3`, and so on.
+
+The requested project style is a hard constraint at every stage. It is repeated in
+the character-sheet, T2I, Flux Edit and Wan prompts; stylized projects explicitly
+reject photorealistic and live-action drift.
+
+A new location, main character, time jump, radical composition, or deliberate cut
+starts a new continuity group and therefore a fresh T2I anchor. Real execution
+requires both `flux_t2i_api.json` and `flux_edit_api.json`; see
+[workflows/README.md](workflows/README.md) for the two-reference Flux Edit map.
+
 ## Automatic GPU sharing with Qwen
 
 On a single 16 GB GPU, Vertical Studio can own the llama.cpp process and load Qwen

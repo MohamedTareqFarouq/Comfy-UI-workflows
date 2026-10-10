@@ -207,3 +207,95 @@ def test_user_research_sources_are_persisted(components) -> None:
     )
     sources = components.db.list_research_sources(project.id)
     assert sources[0]["url"] == "https://example.com/source"
+
+
+def test_connected_scenes_share_exact_frames_and_references(components) -> None:
+    project = components.orchestrator.create_project(
+        ProjectCreate(idea="A recurring worker crosses one continuous platform", duration_seconds=10)
+    )
+    storyboard = components.orchestrator.plan_project(project.id)
+    assert storyboard.requires_character_sheet is True
+    assert storyboard.scenes[0].starts_new_continuity is True
+    assert all(
+        scene.continuity_group == storyboard.scenes[0].continuity_group
+        for scene in storyboard.scenes
+    )
+    components.orchestrator.approve_storyboard(project.id, ApprovalRequest(approved=True))
+    assert components.db.list_jobs(project.id)[0].kind == JobKind.CHARACTER_SHEET
+    components.worker.run_until_idle()
+
+    scenes = components.db.list_scenes(project.id)
+    first_ends = components.orchestrator.db.list_artifacts(project.id, scenes[0].id)
+    first_end = next(
+        item for item in first_ends
+        if item.metadata.get("candidate") == 1 and item.metadata.get("role") == "end"
+    )
+    second_start = next(
+        item for item in components.db.list_artifacts(project.id, scenes[1].id)
+        if item.metadata.get("candidate") == 1 and item.metadata.get("role") == "start"
+    )
+    assert second_start.metadata["shared_from_artifact_id"] == first_end.id
+    assert second_start.path == first_end.path
+    assert second_start.sha256 == first_end.sha256
+
+    second_end = next(
+        item for item in components.db.list_artifacts(project.id, scenes[1].id)
+        if item.metadata.get("candidate") == 1 and item.metadata.get("role") == "end"
+    )
+    with pytest.raises(ValueError, match="previous connected scene"):
+        components.orchestrator.approve_keyframes(
+            scenes[1].id,
+            ArtifactSelection(
+                start_artifact_id=second_start.id,
+                end_artifact_id=second_end.id,
+            ),
+            ApprovalRequest(approved=True),
+        )
+    first_start = next(
+        item for item in first_ends
+        if item.metadata.get("candidate") == 1 and item.metadata.get("role") == "start"
+    )
+    components.orchestrator.approve_keyframes(
+        scenes[0].id,
+        ArtifactSelection(start_artifact_id=first_start.id, end_artifact_id=first_end.id),
+        ApprovalRequest(approved=True),
+    )
+    approved = components.orchestrator.approve_keyframes(
+        scenes[1].id,
+        ArtifactSelection(start_artifact_id=second_start.id, end_artifact_id=second_end.id),
+        ApprovalRequest(approved=True),
+    )
+    assert components.db.get_artifact(approved.selected_start_artifact_id).path == first_end.path
+
+
+def test_continuity_break_creates_a_fresh_t2i_anchor(components) -> None:
+    project = components.orchestrator.create_project(
+        ProjectCreate(idea="A platform scene followed by a different train interior", duration_seconds=10)
+    )
+    components.orchestrator.plan_project(project.id)
+    scenes = components.db.list_scenes(project.id)
+    assert len(scenes) >= 3
+    for index, scene in enumerate(scenes[2:], 2):
+        updated = scene.spec.model_copy(
+            update={
+                "continuity_group": "train-interior",
+                "starts_new_continuity": index == 2,
+                "continuity_reason": "New interior location" if index == 2 else "Same train interior",
+                "transition_from_previous": "cut" if index == 2 else "continuous",
+            }
+        )
+        components.db.update_scene_spec(scene.id, updated)
+    components.orchestrator.approve_storyboard(project.id, ApprovalRequest(approved=True))
+    components.worker.run_until_idle()
+    scenes = components.db.list_scenes(project.id)
+    prior_end = next(
+        item for item in components.db.list_artifacts(project.id, scenes[1].id)
+        if item.metadata.get("candidate") == 1 and item.metadata.get("role") == "end"
+    )
+    reset_start = next(
+        item for item in components.db.list_artifacts(project.id, scenes[2].id)
+        if item.metadata.get("candidate") == 1 and item.metadata.get("role") == "start"
+    )
+    assert reset_start.metadata["generation_method"] == "t2i_anchor"
+    assert "shared_from_artifact_id" not in reset_start.metadata
+    assert reset_start.path != prior_end.path

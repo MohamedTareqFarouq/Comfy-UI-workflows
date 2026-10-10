@@ -1,21 +1,92 @@
 {
   "flux_t2i_api": {
-    "prompt": {"node_id": "REPLACE", "input": "text"},
-    "negative_prompt": {"node_id": "REPLACE", "input": "text"},
-    "seed": {"node_id": "REPLACE", "input": "seed"},
-    "width": {"node_id": "REPLACE", "input": "width"},
-    "height": {"node_id": "REPLACE", "input": "height"},
-    "output_prefix": {"node_id": "REPLACE", "input": "filename_prefix"}
+    "prompt": {
+      "node_id": "REPLACE",
+      "input": "text"
+    },
+    "negative_prompt": {
+      "node_id": "REPLACE",
+      "input": "text"
+    },
+    "seed": {
+      "node_id": "REPLACE",
+      "input": "seed"
+    },
+    "width": {
+      "node_id": "REPLACE",
+      "input": "width"
+    },
+    "height": {
+      "node_id": "REPLACE",
+      "input": "height"
+    },
+    "output_prefix": {
+      "node_id": "REPLACE",
+      "input": "filename_prefix"
+    }
   },
   "wan14b_lightx2v_flf2v_api": {
-    "prompt": {"node_id": "REPLACE", "input": "text"},
-    "negative_prompt": {"node_id": "REPLACE", "input": "text"},
-    "seed": {"node_id": "REPLACE", "input": "seed"},
-    "width": {"node_id": "REPLACE", "input": "width"},
-    "height": {"node_id": "REPLACE", "input": "height"},
-    "frames": {"node_id": "REPLACE", "input": "length"},
-    "start_image": {"node_id": "REPLACE", "input": "image"},
-    "end_image": {"node_id": "REPLACE", "input": "image"},
-    "output_prefix": {"node_id": "REPLACE", "input": "filename_prefix"}
+    "prompt": {
+      "node_id": "REPLACE",
+      "input": "text"
+    },
+    "negative_prompt": {
+      "node_id": "REPLACE",
+      "input": "text"
+    },
+    "seed": {
+      "node_id": "REPLACE",
+      "input": "seed"
+    },
+    "width": {
+      "node_id": "REPLACE",
+      "input": "width"
+    },
+    "height": {
+      "node_id": "REPLACE",
+      "input": "height"
+    },
+    "frames": {
+      "node_id": "REPLACE",
+      "input": "length"
+    },
+    "start_image": {
+      "node_id": "REPLACE",
+      "input": "image"
+    },
+    "end_image": {
+      "node_id": "REPLACE",
+      "input": "image"
+    },
+    "output_prefix": {
+      "node_id": "REPLACE",
+      "input": "filename_prefix"
+    }
+  },
+  "flux_edit_api": {
+    "prompt": {
+      "node_id": "REPLACE",
+      "input": "text"
+    },
+    "negative_prompt": {
+      "node_id": "REPLACE",
+      "input": "text"
+    },
+    "seed": {
+      "node_id": "REPLACE",
+      "input": "seed"
+    },
+    "source_image": {
+      "node_id": "REPLACE",
+      "input": "image"
+    },
+    "character_sheet": {
+      "node_id": "REPLACE",
+      "input": "image"
+    },
+    "output_prefix": {
+      "node_id": "REPLACE",
+      "input": "filename_prefix"
+    }
   }
 }

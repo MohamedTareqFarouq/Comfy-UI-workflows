@@ -1,13 +1,55 @@
 {
-  "flux": {
+  "wan_candidates": [
+    {
+      "template": "wan14b_lightx2v_flf2v_api",
+      "width": 384,
+      "height": 672,
+      "frames": 49,
+      "patches": []
+    },
+    {
+      "template": "wan14b_lightx2v_flf2v_api",
+      "width": 480,
+      "height": 848,
+      "frames": 49,
+      "patches": []
+    },
+    {
+      "template": "wan14b_lightx2v_flf2v_api",
+      "width": 480,
+      "height": 848,
+      "frames": 81,
+      "patches": []
+    }
+  ],
+  "flux_t2i": {
     "template": "flux_t2i_api",
     "patches": [
-      {"node_id": "REPLACE", "input": "text", "value": "qualification portrait test"}
+      {
+        "node_id": "REPLACE",
+        "input": "text",
+        "value": "qualification portrait test"
+      }
     ]
   },
-  "wan_candidates": [
-    {"template": "wan14b_lightx2v_flf2v_api", "width": 384, "height": 672, "frames": 49, "patches": []},
-    {"template": "wan14b_lightx2v_flf2v_api", "width": 480, "height": 848, "frames": 49, "patches": []},
-    {"template": "wan14b_lightx2v_flf2v_api", "width": 480, "height": 848, "frames": 81, "patches": []}
-  ]
+  "flux_edit": {
+    "template": "flux_edit_api",
+    "patches": [
+      {
+        "node_id": "REPLACE",
+        "input": "text",
+        "value": "qualification continuity edit"
+      },
+      {
+        "node_id": "REPLACE",
+        "input": "image",
+        "value": "QUALIFICATION_SOURCE_IMAGE"
+      },
+      {
+        "node_id": "REPLACE",
+        "input": "image",
+        "value": "QUALIFICATION_CHARACTER_SHEET"
+      }
+    ]
+  }
 }

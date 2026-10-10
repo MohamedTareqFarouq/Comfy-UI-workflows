@@ -54,7 +54,15 @@ class Orchestrator:
         storyboard = self._storyboard(
             project, research_context, (request or PlanRequest()).feedback
         )
-        self.db.replace_storyboard(project_id, storyboard.scenes, storyboard.character_bible)
+        bible = {
+            **storyboard.character_bible,
+            "_generation_plan": {
+                "requires_character_sheet": storyboard.requires_character_sheet,
+                "character_sheet_prompt": storyboard.character_sheet_prompt,
+                "visual_style": project.visual_style,
+            },
+        }
+        self.db.replace_storyboard(project_id, storyboard.scenes, bible)
         self.db.transition_project(project_id, ProjectState.STORYBOARD_REVIEW)
         return storyboard
 
@@ -71,11 +79,20 @@ class Orchestrator:
                             "scenes. Each scene must advance a different story beat. Scene "
                             "durations must sum exactly to the requested project duration and each "
                             "must be between 1 and 6 seconds. Preserve identity, continuity and "
-                            "safe framing. The top-level keys are summary, character_bible, and "
-                            "scenes; never use a storyboard wrapper. Every scene uses title, "
+                            "safe framing. Treat project.visual_style as a mandatory design constraint "
+                            "and repeat it concretely in every scene composition and character bible. "
+                            "Decide explicitly whether a reusable character sheet "
+                            "is required. Divide scenes into contiguous continuity groups. The first "
+                            "scene of every group must set starts_new_continuity=true and will use a "
+                            "fresh T2I anchor; later scenes in that group must set it false and reuse "
+                            "the exact previous end frame. Start a new group for a new location, main "
+                            "character, time jump, radical composition, or deliberate cut. The top-level "
+                            "keys include summary, requires_character_sheet, character_sheet_prompt, "
+                            "character_bible, and scenes; never use a storyboard wrapper. Every scene uses title, "
                             "narrative_purpose, duration_seconds, start_composition, "
-                            "end_composition, and motion; never substitute scene, duration, "
-                            "description, or beat. For every scene, describe both its opening keyframe in "
+                            "end_composition, motion, continuity_group, starts_new_continuity, "
+                            "continuity_reason, and transition_from_previous; never substitute scene, "
+                            "duration, description, or beat. For every scene, describe both its opening keyframe in "
                             "start_composition and its closing keyframe in end_composition, plus "
                             "the motion connecting them. Apply revision feedback. Return JSON only."
                         ),
@@ -103,9 +120,19 @@ class Orchestrator:
             camera="Stable cinematic camera with restrained movement",
             continuity=["same identity", "same wardrobe", "consistent palette"],
             negative_constraints=["identity change", "wardrobe change", "extra limbs", "text", "watermark", "jitter"],
+            continuity_group="main-sequence",
+            starts_new_continuity=n == 1,
+            continuity_reason="First visual anchor" if n == 1 else "Same subject, location and continuous action",
+            transition_from_previous="new_sequence" if n == 1 else "continuous",
         ) for n in range(1, count + 1)]
         return Storyboard(
             summary=f"A {project.duration_seconds}-second vertical interpretation of {project.idea}",
+            requires_character_sheet=True,
+            character_sheet_prompt=(
+                f"Full-body character turnaround and identity reference for the recurring protagonist "
+                f"in {project.visual_style}; front, three-quarter and profile views, consistent face, "
+                "wardrobe, proportions and neutral lighting"
+            ),
             character_bible={"style": project.visual_style, "identity_rule": "Preserve face, silhouette, wardrobe, palette and proportions."},
             scenes=scenes,
         )
@@ -123,8 +150,25 @@ class Orchestrator:
         project = self.db.get_project(scene.project_id)
         if project.state != ProjectState.STORYBOARD_REVIEW or scene.state != SceneState.PLANNED:
             raise ValueError("scenes can only be edited during storyboard review")
-        others = [item.spec for item in self.db.list_scenes(project.id) if item.id != scene_id]
-        Storyboard(summary="edited", character_bible={}, scenes=[*others, spec])
+        specs = [
+            spec if item.id == scene_id else item.spec
+            for item in self.db.list_scenes(project.id)
+        ]
+        if specs and not specs[0].starts_new_continuity:
+            specs[0] = specs[0].model_copy(update={
+                "starts_new_continuity": True,
+                "transition_from_previous": "new_sequence",
+                "continuity_reason": "First visual anchor",
+            })
+        bible = self.db.get_character_bible(project.id)
+        plan = bible.get("_generation_plan", {})
+        Storyboard(
+            summary="edited",
+            requires_character_sheet=bool(plan.get("requires_character_sheet")),
+            character_sheet_prompt=plan.get("character_sheet_prompt", ""),
+            character_bible=bible,
+            scenes=specs,
+        )
         return self.db.update_scene_spec(scene_id, spec)
 
     def delete_scene(self, scene_id: str) -> None:
@@ -161,29 +205,77 @@ class Orchestrator:
             self.db.transition_project(project_id, ProjectState.PLANNING, request.notes)
             return []
         self.db.transition_project(project_id, ProjectState.REFERENCES)
+        scenes = self.db.list_scenes(project_id)
+        if scenes and not scenes[0].spec.starts_new_continuity:
+            first_spec = scenes[0].spec.model_copy(update={
+                "starts_new_continuity": True,
+                "transition_from_previous": "new_sequence",
+                "continuity_reason": "Migrated first visual anchor",
+            })
+            self.db.update_scene_spec(scenes[0].id, first_spec)
+        bible = self.db.get_character_bible(project_id)
+        plan = bible.get("_generation_plan", {})
+        if plan.get("requires_character_sheet"):
+            self.queue_character_sheet(project_id)
         return [self.queue_keyframes(scene.id) for scene in self.db.list_scenes(project_id)]
+
+    def queue_character_sheet(self, project_id: str) -> Job:
+        bible = self.db.get_character_bible(project_id)
+        plan = bible.get("_generation_plan", {})
+        for job in reversed(self.db.list_jobs(project_id)):
+            if job.kind == JobKind.CHARACTER_SHEET and job.state in {JobState.QUEUED, JobState.RUNNING, JobState.SUCCEEDED}:
+                return job
+        project = self.db.get_project(project_id)
+        payload = {
+            "prompt": plan.get("character_sheet_prompt", "consistent recurring character reference sheet"),
+            "visual_style": plan.get("visual_style", project.visual_style),
+            "character_bible": bible,
+            "width": 384,
+            "height": 672,
+            "template": "flux_t2i_api",
+        }
+        return self.db.create_job(
+            project_id, JobKind.CHARACTER_SHEET,
+            stable_key("character_sheet", project_id, payload), payload,
+        )
 
     def queue_keyframes(self, scene_id: str) -> Job:
         scene = self.db.get_scene(scene_id)
+        project = self.db.get_project(scene.project_id)
         active = self._active(scene_id, JobKind.KEYFRAME)
         if active: return active
         if scene.state != SceneState.KEYFRAMES_QUEUED:
             scene = self.db.transition_scene(scene_id, SceneState.KEYFRAMES_QUEUED)
         prior = [j for j in self.db.list_jobs(scene.project_id) if j.scene_id == scene.id and j.kind == JobKind.KEYFRAME]
         payload = {"scene_id": scene.id, "scene_revision": scene.revision, "spec": scene.spec.model_dump(),
-                   "candidates": 2, "width": 384, "height": 672, "template": "flux_t2i_api",
+                   "visual_style": project.visual_style,
+                   "candidates": 2, "width": 384, "height": 672,
+                   "generation_mode": "anchor" if scene.spec.starts_new_continuity else "continuation",
+                   "t2i_template": "flux_t2i_api", "edit_template": "flux_edit_api",
                    "generation_round": len(prior) + 1}
         return self.db.create_job(scene.project_id, JobKind.KEYFRAME, stable_key("keyframe", payload), payload, scene.id)
 
     def approve_keyframes(self, scene_id: str, selection: ArtifactSelection, request: ApprovalRequest) -> Scene:
         scene = self.db.get_scene(scene_id)
         if scene.state != SceneState.KEYFRAMES_READY: raise ValueError("keyframes are not ready")
-        self.db.record_approval(scene.project_id, "keyframes", request.approved, request.notes, scene.id)
         if not request.approved:
+            self.db.record_approval(scene.project_id, "keyframes", False, request.notes, scene.id)
             self.queue_keyframes(scene.id)
             return self.db.get_scene(scene.id)
         if not selection.start_artifact_id or not selection.end_artifact_id:
             raise ValueError("select start and end keyframes")
+        if not scene.spec.starts_new_continuity:
+            scenes = self.db.list_scenes(scene.project_id)
+            index = next(i for i, item in enumerate(scenes) if item.id == scene.id)
+            previous = scenes[index - 1]
+            if previous.spec.continuity_group != scene.spec.continuity_group:
+                raise ValueError("continuation scene does not follow its continuity group")
+            if previous.state != SceneState.KEYFRAMES_APPROVED or not previous.selected_end_artifact_id:
+                raise ValueError("approve the previous connected scene first")
+            selected_start = self.db.get_artifact(selection.start_artifact_id)
+            if selected_start.metadata.get("shared_from_artifact_id") != previous.selected_end_artifact_id:
+                raise ValueError("select the start frame that exactly matches the previous approved end frame")
+        self.db.record_approval(scene.project_id, "keyframes", True, request.notes, scene.id)
         self.db.select_artifacts(scene.id, start_id=selection.start_artifact_id, end_id=selection.end_artifact_id)
         scene = self.db.transition_scene(scene.id, SceneState.KEYFRAMES_APPROVED)
         scenes = self.db.list_scenes(scene.project_id)
@@ -199,6 +291,7 @@ class Orchestrator:
 
     def queue_video(self, scene_id: str, retry: RetryRequest | None = None) -> Job:
         scene = self.db.get_scene(scene_id)
+        project = self.db.get_project(scene.project_id)
         active = self._active(scene_id, JobKind.VIDEO)
         if active: return active
         if not scene.selected_start_artifact_id or not scene.selected_end_artifact_id:
@@ -208,6 +301,7 @@ class Orchestrator:
         prior = [j for j in self.db.list_jobs(scene.project_id) if j.scene_id == scene.id and j.kind == JobKind.VIDEO]
         ordinal = len(prior) + 1
         payload = {"scene_id": scene.id, "scene_revision": scene.revision, "spec": scene.spec.model_dump(),
+          "visual_style": project.visual_style,
           "start_artifact_id": scene.selected_start_artifact_id, "end_artifact_id": scene.selected_end_artifact_id,
           "attempt": ordinal, "duration_seconds": scene.spec.duration_seconds, "width": 384, "height": 672,
           "fps": 16, "frames": 49, "template": "wan14b_lightx2v_flf2v_api",

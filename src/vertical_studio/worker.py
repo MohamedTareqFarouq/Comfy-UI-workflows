@@ -25,7 +25,12 @@ class Worker:
         job = self.db.claim_next_job(self.owner)
         if not job: return None
         try:
-            {JobKind.KEYFRAME: self._keyframes, JobKind.VIDEO: self._video, JobKind.RENDER: self._render}[job.kind](job)
+            {
+                JobKind.CHARACTER_SHEET: self._character_sheet,
+                JobKind.KEYFRAME: self._keyframes,
+                JobKind.VIDEO: self._video,
+                JobKind.RENDER: self._render,
+            }[job.kind](job)
             return self.db.finish_job(job.id)
         except GenerationError as exc:
             if exc.code == "oom": self.generator.free_memory()
@@ -57,30 +62,112 @@ class Worker:
         path = self.settings.projects_dir / job.project_id / "scenes" / (job.scene_id or "project") / "attempts" / attempt_id
         path.mkdir(parents=True, exist_ok=True); return path
 
+    @staticmethod
+    def _latest_candidates(artifacts: list, role: str) -> dict[int, object]:
+        result: dict[int, object] = {}
+        for artifact in reversed(artifacts):
+            candidate = artifact.metadata.get("candidate")
+            if artifact.metadata.get("role") == role and isinstance(candidate, int):
+                result.setdefault(candidate, artifact)
+        return result
+
+    def _character_sheet(self, job: Job) -> None:
+        seed = random.randrange(1, 2**31)
+        payload = {**job.payload, "project_id": job.project_id, "seed": seed}
+        attempt = self.db.create_attempt(job, "flux-t2i-character-sheet-v1", seed, payload)
+        try:
+            with self.gpu.comfy(reset_models=False):
+                result = self.generator.generate_character_sheet(
+                    self._dir(job, attempt), payload
+                )
+            path = result.files[0]
+            self.db.add_artifact(
+                job.project_id, ArtifactKind.IMAGE, path, sha256_file(path),
+                {**result.metadata, "role": "character_sheet"}, None, attempt,
+            )
+            self.db.finish_attempt(attempt, "succeeded")
+        except Exception as exc:
+            self.db.finish_attempt(attempt, "failed", {"message": str(exc)})
+            raise
+
     def _keyframes(self, job: Job) -> None:
         seed = random.randrange(1, 2**31)
+        scene = self.db.get_scene(job.scene_id)
         generation_payload = {**job.payload, "seed": seed}
+        bible = self.db.get_character_bible(job.project_id)
+        plan = bible.get("_generation_plan", {})
+        sheets = [
+            artifact for artifact in self.db.list_artifacts(job.project_id)
+            if artifact.metadata.get("role") == "character_sheet"
+        ]
+        if plan.get("requires_character_sheet"):
+            if not sheets:
+                raise GenerationError(
+                    "character_sheet_missing", "required character sheet was not generated"
+                )
+            generation_payload["character_sheet_path"] = sheets[-1].path
+        if not scene.spec.starts_new_continuity:
+            scenes = self.db.list_scenes(job.project_id)
+            index = next(i for i, item in enumerate(scenes) if item.id == scene.id)
+            if index == 0:
+                raise GenerationError("continuity_dependency_missing", "continuation has no previous scene")
+            previous = scenes[index - 1]
+            if previous.spec.continuity_group != scene.spec.continuity_group:
+                raise GenerationError("continuity_dependency_missing", "previous scene belongs to another continuity group")
+            previous_ends = self._latest_candidates(
+                self.db.list_artifacts(job.project_id, previous.id), "end"
+            )
+            candidates = int(job.payload.get("candidates", 2))
+            if len(previous_ends) < candidates:
+                raise GenerationError(
+                    "continuity_dependency_missing",
+                    "previous end frames are unavailable",
+                    transient=True,
+                )
+            generation_payload["source_frames"] = [
+                {"candidate": candidate, "artifact_id": previous_ends[candidate].id,
+                 "path": previous_ends[candidate].path, "sha256": previous_ends[candidate].sha256}
+                for candidate in range(1, candidates + 1)
+            ]
         attempt = self.db.create_attempt(
-            job, "flux-klein-4b-v1", seed, generation_payload
+            job, "flux-continuity-chain-v1", seed, generation_payload
         )
         try:
             with self.gpu.comfy(reset_models=False):
                 result = self.generator.generate_keyframes(
                     self._dir(job, attempt), generation_payload
                 )
+            for reference in generation_payload.get("source_frames", []):
+                self.db.add_artifact(
+                    job.project_id, ArtifactKind.IMAGE, Path(reference["path"]),
+                    reference["sha256"],
+                    {"candidate": reference["candidate"], "role": "start",
+                     "generation_method": "reuse_previous_end",
+                     "shared_from_artifact_id": reference["artifact_id"],
+                     "continuity_group": scene.spec.continuity_group},
+                    job.scene_id, attempt,
+                )
             for path in result.files:
                 tokens = path.stem.split("-")
                 candidate = int(tokens[1]) if len(tokens) > 2 and tokens[1].isdigit() else 1
                 role = tokens[-1] if tokens[-1] in {"start", "end"} else "candidate"
-                self.db.add_artifact(job.project_id, ArtifactKind.IMAGE, path, sha256_file(path),
-                    {**result.metadata, "candidate": candidate, "role": role, "probe": probe_media(path)}, job.scene_id, attempt)
+                method = "t2i_anchor" if role == "start" else "flux_edit"
+                self.db.add_artifact(
+                    job.project_id, ArtifactKind.IMAGE, path, sha256_file(path),
+                    {**result.metadata, "candidate": candidate, "role": role,
+                     "generation_method": method,
+                     "continuity_group": scene.spec.continuity_group,
+                     "uses_character_sheet": bool(generation_payload.get("character_sheet_path"))},
+                    job.scene_id, attempt,
+                )
             self.db.finish_attempt(attempt, "succeeded")
             self.db.transition_scene(job.scene_id, SceneState.KEYFRAMES_READY)
             scenes = self.db.list_scenes(job.project_id)
             if all(s.state == SceneState.KEYFRAMES_READY for s in scenes) and self.db.get_project(job.project_id).state == ProjectState.REFERENCES:
                 self.db.transition_project(job.project_id, ProjectState.CONTACT_SHEET_REVIEW)
         except Exception as exc:
-            self.db.finish_attempt(attempt, "failed", {"message": str(exc)}); raise
+            self.db.finish_attempt(attempt, "failed", {"message": str(exc)})
+            raise
 
     def _video(self, job: Job) -> None:
         seed = random.randrange(1, 2**31)
@@ -118,7 +205,7 @@ class Worker:
                     "criteria": [
                         "prompt adherence", "identity and wardrobe", "environment",
                         "anatomy and unwanted text", "temporal consistency",
-                        "start/end keyframe continuity",
+                        "start/end keyframe continuity", "requested visual style fidelity",
                     ],
                 },
                 "reference_images": references,

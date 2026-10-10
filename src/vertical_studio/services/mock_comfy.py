@@ -28,6 +28,18 @@ class MockComfyClient:
         red, green, blue = colorsys.hsv_to_rgb(hue, 0.45, 0.72)
         return f"0x{int(red * 255):02x}{int(green * 255):02x}{int(blue * 255):02x}"
 
+    def generate_character_sheet(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult:
+        self._maybe_fail(payload)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        width = int(payload.get("width", 384))
+        height = int(payload.get("height", 672))
+        path = output_dir / "character-sheet.png"
+        run_ffmpeg([
+            "-f", "lavfi", "-i", f"color=c={self._color('character-sheet')}:s={width}x{height}:d=0.1",
+            "-frames:v", "1", "-threads", "1", str(path),
+        ])
+        return GenerationResult(files=[path], metadata={"simulated": True, "role": "character_sheet"})
+
     def generate_keyframes(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult:
         self._maybe_fail(payload)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -36,8 +48,10 @@ class MockComfyClient:
         candidates = int(payload.get("candidates", 2))
         scene_id = str(payload.get("scene_id", "scene"))
         files: list[Path] = []
+        mode = payload.get("generation_mode", "anchor")
+        roles = ("start", "end") if mode == "anchor" else ("end",)
         for candidate in range(1, candidates + 1):
-            for role_index, role in enumerate(("start", "end")):
+            for role_index, role in enumerate(roles):
                 path = output_dir / f"candidate-{candidate}-{role}.png"
                 color = self._color(scene_id, candidate * 2 + role_index)
                 run_ffmpeg(

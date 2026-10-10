@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -52,6 +52,7 @@ class JobState(StrEnum):
 
 
 class JobKind(StrEnum):
+    CHARACTER_SHEET = "character_sheet"
     KEYFRAME = "keyframe"
     VIDEO = "video"
     QA = "qa"
@@ -112,10 +113,16 @@ class SceneSpec(BaseModel):
     continuity: list[str] = Field(default_factory=list)
     negative_constraints: list[str] = Field(default_factory=list)
     safe_area: str = Field(default="keep essential subjects inside the center 80%")
+    continuity_group: str = Field(default="main", min_length=1, max_length=80)
+    starts_new_continuity: bool = False
+    continuity_reason: str = Field(default="continuous visual action", max_length=500)
+    transition_from_previous: Literal["continuous", "cut", "crossfade", "new_sequence"] = "continuous"
 
 
 class Storyboard(BaseModel):
     summary: str
+    requires_character_sheet: bool
+    character_sheet_prompt: str = Field(max_length=2000)
     character_bible: dict[str, Any] = Field(default_factory=dict)
     scenes: list[SceneSpec] = Field(min_length=3, max_length=10)
 
@@ -124,6 +131,22 @@ class Storyboard(BaseModel):
         total = sum(scene.duration_seconds for scene in self.scenes)
         if not 9.0 <= total <= 33.0:
             raise ValueError("storyboard duration must be approximately 10-30 seconds")
+        seen: set[str] = set()
+        previous = ""
+        for index, scene in enumerate(self.scenes):
+            group = scene.continuity_group
+            if index == 0 and not scene.starts_new_continuity:
+                raise ValueError("the first scene must start a new continuity group")
+            if index and group != previous and not scene.starts_new_continuity:
+                raise ValueError("a changed continuity group must start with a T2I anchor")
+            if index and group == previous and scene.starts_new_continuity:
+                raise ValueError("a new T2I anchor must use a new continuity group")
+            if group in seen and group != previous:
+                raise ValueError("continuity groups must be contiguous")
+            seen.add(group)
+            previous = group
+        if self.requires_character_sheet and not self.character_sheet_prompt.strip():
+            raise ValueError("character_sheet_prompt is required when a character sheet is needed")
         return self
 
 

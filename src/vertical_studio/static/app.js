@@ -43,7 +43,8 @@ function when(value){
 }
 
 const jobLabels={
-  keyframe:"Generating scene keyframes with Flux",
+  character_sheet:"Generating the character sheet with Flux",
+  keyframe:"Generating continuity keyframes with Flux",
   video:"Generating scene videos with Wan",
   qa:"Checking generated media",
   render:"Rendering the final video"
@@ -364,6 +365,10 @@ function renderDetail(){
       media+=`<div class="media"><video controls preload="metadata" src="/api/artifacts/${video.id}/content"></video></div>`;
     }
 
+    const previousScene=scenes[scenes.indexOf(scene)-1];
+    const waitingForPrevious=!scene.spec.starts_new_continuity&&
+      previousScene?.spec.continuity_group===scene.spec.continuity_group&&
+      previousScene?.state!=="keyframes_approved";
     const qaReport=[...qa_reports].reverse().find(report=>report.scene_id===scene.id);
     const qaHtml=qaReport?`
       <div class="qa ${qaReport.report.technical_pass?"pass":"fail"}">
@@ -379,11 +384,13 @@ function renderDetail(){
         <button class="danger" data-delete-scene="${scene.id}">Delete scene</button>`;
     }
     if(scene.state==="keyframes_ready"){
-      controls=`${pairs.map(pair=>`
-        <button data-kf="${scene.id}" data-start="${pair.start.id}" data-end="${pair.end.id}">
-          Approve candidate ${pair.candidate}
-        </button>
-      `).join("")}<button data-retry-kf="${scene.id}">Regenerate</button>`;
+      controls=waitingForPrevious
+        ?`<small>Approve the previous connected scene first.</small>`
+        :`${pairs.map(pair=>`
+          <button data-kf="${scene.id}" data-start="${pair.start.id}" data-end="${pair.end.id}">
+            Approve candidate ${pair.candidate}
+          </button>
+        `).join("")}<button data-retry-kf="${scene.id}">Regenerate</button>`;
     }
     if(["video_ready","qa_failed"].includes(scene.state)){
       controls=`<button data-approve-video="${scene.id}">Approve video</button><button data-retry-video="${scene.id}">Retry video</button>`;
@@ -395,13 +402,32 @@ function renderDetail(){
           <h3>${esc(scene.spec.title)}</h3>
           <span class="badge ${scene.state==="approved"?"ok":""}">${scene.state.replaceAll("_"," ")}</span>
         </div>
+        <div class="continuity-meta">
+          <span>${scene.spec.starts_new_continuity?"T2I anchor":"Flux Edit continuation"}</span>
+          <span>Group: ${esc(scene.spec.continuity_group)}</span>
+          <span>${esc(scene.spec.transition_from_previous.replaceAll("_"," "))}</span>
+        </div>
         <p class="spec">${esc(scene.spec.narrative_purpose)}</p>
+        <small class="continuity-reason">${esc(scene.spec.continuity_reason)}</small>
         ${media}${qaHtml}
         <div class="card-actions">${controls}</div>
         ${renderSceneHistory(scene,attempts,artifacts)}
       </article>
     `;
   }).join("");
+
+  const characterSheet=[...artifacts].reverse().find(
+    artifact=>artifact.metadata.role==="character_sheet"
+  );
+  const characterPlan=state.detail.character_bible?._generation_plan||{};
+  const characterHtml=characterPlan.requires_character_sheet?`
+    <section class="character-plan">
+      <div><span class="eyebrow">IDENTITY REFERENCE</span><h3>Character sheet required</h3>
+      <p>${esc(characterPlan.character_sheet_prompt)}</p></div>
+      ${characterSheet?`<img src="/api/artifacts/${characterSheet.id}/content" alt="Generated character sheet">`:
+        '<span class="badge">Pending generation</span>'}
+    </section>
+  `:`<div class="notice">Qwen determined that this storyboard does not require a character sheet.</div>`;
 
   q("#project-view").innerHTML=`
     <div class="project-header">
@@ -410,6 +436,7 @@ function renderDetail(){
     </div>
     <div id="activity-panel" class="activity-panel" role="status" aria-live="polite"></div>
     <div class="toolbar">${actions.join("")}</div>
+    ${characterHtml}
     <div class="notice">${project.execution_mode==="real"
       ?"Real mode: Qwen and ComfyUI models are loaded one at a time to protect GPU memory."
       :"Simulation mode creates deterministic portrait fixtures."}

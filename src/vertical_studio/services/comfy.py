@@ -26,6 +26,7 @@ class GenerationResult:
 
 
 class Generator(Protocol):
+    def generate_character_sheet(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult: ...
     def generate_keyframes(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult: ...
     def generate_video(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult: ...
     def health(self) -> dict[str, Any]: ...
@@ -229,46 +230,171 @@ class ComfyClient:
             raise GenerationError("comfy_no_output", "ComfyUI completed without media output")
         return GenerationResult(files=files, metadata={"prompt_id": prompt_id, "history": history})
 
-    def generate_keyframes(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult:
-        template = payload.get("template", "flux_t2i_api")
-        if payload.get("patches") is not None:
-            return self._run(template, payload, output_dir)
-        self._load_template(template)
-
+    def _generate_t2i_image(
+        self, output_dir: Path, payload: dict[str, Any], *, prompt: str,
+        seed: int, output_prefix: str,
+    ) -> GenerationResult:
+        template = payload.get("t2i_template", payload.get("template", "flux_t2i_api"))
         mapping = self._load_mapping(
             template, {"prompt", "negative_prompt", "seed", "width", "height", "output_prefix"}
         )
+        values = {
+            "prompt": prompt,
+            "seed": seed,
+            "width": int(payload["width"]),
+            "height": int(payload["height"]),
+            "output_prefix": output_prefix,
+        }
+        return self._run(
+            template, {**payload, "patches": self._mapped_patches(mapping, values)}, output_dir
+        )
+
+    def _generate_edit_image(
+        self, output_dir: Path, payload: dict[str, Any], *, prompt: str,
+        seed: int, source_path: Path, character_sheet_path: Path | None,
+        output_prefix: str,
+    ) -> GenerationResult:
+        template = payload.get("edit_template", "flux_edit_api")
+        required = {"prompt", "seed", "source_image", "output_prefix"}
+        if character_sheet_path is not None:
+            required.add("character_sheet")
+        mapping = self._load_mapping(template, required)
+        source_name = self._upload_image(source_path)
+        values: dict[str, Any] = {
+            "prompt": prompt,
+            "seed": seed,
+            "source_image": source_name,
+            "output_prefix": output_prefix,
+        }
+        if "negative_prompt" in mapping:
+            values["negative_prompt"] = payload.get("negative_prompt", "")
+        # Flux Klein derives dimensions from the source image. Other edit graphs
+        # may still expose explicit dimensions, so patch them only when mapped.
+        if "width" in mapping:
+            values["width"] = int(payload["width"])
+        if "height" in mapping:
+            values["height"] = int(payload["height"])
+        if character_sheet_path is not None:
+            values["character_sheet"] = self._upload_image(character_sheet_path)
+        elif "character_sheet" in mapping:
+            # An always-on two-image export otherwise keeps its sample placeholder.
+            # Repeating the source is neutral and prevents unrelated reference leakage.
+            values["character_sheet"] = source_name
+        return self._run(
+            template, {**payload, "patches": self._mapped_patches(mapping, values)}, output_dir
+        )
+
+    @staticmethod
+    def _move_first(result: GenerationResult, target: Path) -> Path:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source = result.files[0]
+        target = target.with_suffix(source.suffix)
+        shutil.move(str(source), target)
+        return target
+
+    @staticmethod
+    def _style_directive(payload: dict[str, Any]) -> str:
+        style = str(payload.get("visual_style", "")).strip()
+        if not style:
+            return ""
+        directive = (
+            f"MANDATORY VISUAL STYLE: {style}. Keep this exact rendering medium, palette, "
+            "shading, line treatment, material language and level of stylization in every frame. "
+        )
+        stylized = (
+            "cartoon", "anime", "illustrat", "comic", "cel", "clay", "stylized",
+            "animation", "paint", "sketch", "pixel",
+        )
+        if any(token in style.lower() for token in stylized):
+            directive += "Do not convert it to photorealistic, live-action or photographic imagery. "
+        return directive
+
+    @staticmethod
+    def _style_negative(visual_style: str) -> str:
+        base = "visual style drift, inconsistent rendering medium"
+        stylized = (
+            "cartoon", "anime", "illustrat", "comic", "cel", "clay", "stylized",
+            "animation", "paint", "sketch", "pixel",
+        )
+        if any(token in visual_style.lower() for token in stylized):
+            return f"{base}, photorealistic, live action, photographic skin, documentary footage"
+        return base
+
+    def generate_character_sheet(
+        self, output_dir: Path, payload: dict[str, Any]
+    ) -> GenerationResult:
+        prompt = (
+            f"{self._style_directive(payload)}{payload['prompt']}. Character reference sheet, "
+            "front, three-quarter and profile "
+            "views, consistent face, hair, wardrobe, proportions, neutral background, vertical 9:16."
+        )
+        result = self._generate_t2i_image(
+            output_dir / "run", payload, prompt=prompt, seed=int(payload["seed"]),
+            output_prefix=f"{payload.get('project_id', 'project')}-character-sheet",
+        )
+        target = self._move_first(result, output_dir / "character-sheet")
+        return GenerationResult(files=[target], metadata={"run": result.metadata})
+
+    def generate_keyframes(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult:
+        template = payload.get("template")
+        if payload.get("patches") is not None:
+            return self._run(template or "flux_t2i_api", payload, output_dir)
+        if template:
+            self._load_template(template)
         spec = payload["spec"]
-        all_files: list[Path] = []
-        prompts: list[dict[str, Any]] = []
+        mode = payload.get("generation_mode", "anchor")
+        candidates = int(payload.get("candidates", 2))
         base_seed = int(payload["seed"])
-        for candidate in range(1, int(payload.get("candidates", 2)) + 1):
-            for role_offset, role in enumerate(("start", "end")):
-                composition = spec[f"{role}_composition"]
-                prompt = (
-                    f"{spec['narrative_purpose']}. {composition}. "
+        style = str(payload.get("visual_style", "")).strip()
+        style_directive = self._style_directive(payload)
+        negative_parts = list(spec.get("negative_constraints", []))
+        negative_parts.append(self._style_negative(style))
+        common = {**payload, "negative_prompt": ", ".join(filter(None, negative_parts))}
+        sheet = Path(payload["character_sheet_path"]) if payload.get("character_sheet_path") else None
+        source_frames = {int(item["candidate"]): item for item in payload.get("source_frames", [])}
+        files: list[Path] = []
+        runs: list[dict[str, Any]] = []
+        for candidate in range(1, candidates + 1):
+            if mode == "anchor":
+                start_prompt = (
+                    f"{style_directive}{spec['narrative_purpose']}. {spec['start_composition']}. "
                     f"Vertical 9:16. {spec.get('safe_area', '')}"
                 )
-                values = {
-                    "prompt": prompt,
-                    "negative_prompt": ", ".join(spec.get("negative_constraints", [])),
-                    "seed": base_seed + candidate * 10 + role_offset,
-                    "width": int(payload["width"]),
-                    "height": int(payload["height"]),
-                    "output_prefix": f"{payload['scene_id']}-c{candidate}-{role}",
-                }
-                result = self._run(
-                    template,
-                    {**payload, "patches": self._mapped_patches(mapping, values)},
-                    output_dir / f"candidate-{candidate}-{role}",
+                start_result = self._generate_t2i_image(
+                    output_dir / f"candidate-{candidate}-start-run", common,
+                    prompt=start_prompt, seed=base_seed + candidate * 10,
+                    output_prefix=f"{payload['scene_id']}-c{candidate}-start",
                 )
-                source = result.files[0]
-                target = output_dir / f"candidate-{candidate}-{role}{source.suffix}"
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(source), target)
-                all_files.append(target)
-                prompts.append({"candidate": candidate, "role": role, "prompt_id": result.metadata["prompt_id"]})
-        return GenerationResult(files=all_files, metadata={"runs": prompts})
+                start_path = self._move_first(
+                    start_result, output_dir / f"candidate-{candidate}-start"
+                )
+                files.append(start_path)
+                runs.append({"candidate": candidate, "role": "start", **start_result.metadata})
+            else:
+                if candidate not in source_frames:
+                    raise GenerationError(
+                        "continuity_dependency_missing",
+                        f"candidate {candidate} is missing its previous frame",
+                    )
+                start_path = Path(source_frames[candidate]["path"])
+            edit_prompt = (
+                f"{style_directive}Edit the source into the next keyframe without changing its "
+                f"rendering style. {spec['narrative_purpose']}. "
+                f"Target composition: {spec['end_composition']}. Motion progression: {spec['motion']}. "
+                "Use the source image for immediate continuity and the character sheet for identity "
+                "when supplied. Preserve face, "
+                f"wardrobe, background and vertical framing. {spec.get('safe_area', '')}"
+            )
+            end_result = self._generate_edit_image(
+                output_dir / f"candidate-{candidate}-end-run", common,
+                prompt=edit_prompt, seed=base_seed + candidate * 10 + 1,
+                source_path=start_path, character_sheet_path=sheet,
+                output_prefix=f"{payload['scene_id']}-c{candidate}-end",
+            )
+            end_path = self._move_first(end_result, output_dir / f"candidate-{candidate}-end")
+            files.append(end_path)
+            runs.append({"candidate": candidate, "role": "end", **end_result.metadata})
+        return GenerationResult(files=files, metadata={"runs": runs, "generation_mode": mode})
 
     def generate_video(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult:
         template = payload.get("template", "wan14b_lightx2v_flf2v_api")
@@ -293,13 +419,20 @@ class ComfyClient:
         spec = payload["spec"]
         start_name = self._upload_image(Path(payload["start_image_path"]))
         end_name = self._upload_image(Path(payload["end_image_path"]))
+        style = str(payload.get("visual_style", "")).strip()
+        action = payload.get("prompt_override") or (
+            f"{spec['narrative_purpose']}. Motion: {spec['motion']}. "
+            f"Camera: {spec.get('camera', 'stable camera')}."
+        )
+        negative_parts = list(spec.get("negative_constraints", []))
+        negative_parts.append(self._style_negative(style))
         values = {
             "prompt": (
-                f"{spec['narrative_purpose']}. Motion: {spec['motion']}. "
-                f"Camera: {spec.get('camera', 'stable camera')}. Preserve identity, "
-                "wardrobe, environment and vertical composition."
+                f"{self._style_directive(payload)}{action} Preserve the exact visual style of both "
+                "reference keyframes throughout the motion. Preserve identity, wardrobe, environment "
+                "and vertical composition."
             ),
-            "negative_prompt": ", ".join(spec.get("negative_constraints", [])),
+            "negative_prompt": ", ".join(filter(None, negative_parts)),
             "seed": int(payload["seed"]),
             "width": int(payload["width"]),
             "height": int(payload["height"]),
