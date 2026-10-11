@@ -12,6 +12,7 @@ from vertical_studio.schemas import (
     ProjectCreate,
     ProjectState,
     RenderRequest,
+    RetryPromptRevisionRequest,
     RetryRequest,
     SceneState,
 )
@@ -266,6 +267,54 @@ def test_cross_scene_artifact_selection_is_rejected(components) -> None:
         )
 
 
+def test_keyframe_roles_and_candidates_cannot_be_swapped(components) -> None:
+    project = components.orchestrator.create_project(
+        ProjectCreate(idea="Bind the correct start and end frames", duration_seconds=10)
+    )
+    components.orchestrator.plan_project(project.id)
+    approve_storyboard_and_references(components, project.id)
+    components.worker.run_until_idle()
+    scene = components.db.list_scenes(project.id)[0]
+    artifacts = components.db.list_artifacts(project.id, scene.id)
+    start_1 = next(
+        item for item in artifacts
+        if item.metadata.get("candidate") == 1 and item.metadata.get("role") == "start"
+    )
+    end_1 = next(
+        item for item in artifacts
+        if item.metadata.get("candidate") == 1 and item.metadata.get("role") == "end"
+    )
+    end_2 = next(
+        item for item in artifacts
+        if item.metadata.get("candidate") == 2 and item.metadata.get("role") == "end"
+    )
+
+    with pytest.raises(ValueError, match="not a start keyframe"):
+        components.orchestrator.approve_keyframes(
+            scene.id,
+            ArtifactSelection(start_artifact_id=end_1.id, end_artifact_id=start_1.id),
+            ApprovalRequest(approved=True),
+        )
+    with pytest.raises(ValueError, match="same candidate"):
+        components.orchestrator.approve_keyframes(
+            scene.id,
+            ArtifactSelection(start_artifact_id=start_1.id, end_artifact_id=end_2.id),
+            ApprovalRequest(approved=True),
+        )
+
+    components.orchestrator.approve_keyframes(
+        scene.id,
+        ArtifactSelection(start_artifact_id=start_1.id, end_artifact_id=end_1.id),
+        ApprovalRequest(approved=True),
+    )
+    video_job = components.orchestrator.queue_video(scene.id)
+    binding = video_job.payload["keyframe_binding"]
+    assert binding["start"]["artifact_id"] == start_1.id
+    assert binding["end"]["artifact_id"] == end_1.id
+    assert binding["start"]["sha256"] == start_1.sha256
+    assert binding["end"]["sha256"] == end_1.sha256
+
+
 def test_user_research_sources_are_persisted(components) -> None:
     project = components.orchestrator.create_project(
         ProjectCreate(
@@ -336,6 +385,49 @@ def test_connected_scenes_share_exact_frames_and_references(components) -> None:
         ApprovalRequest(approved=True),
     )
     assert components.db.get_artifact(approved.selected_start_artifact_id).path == first_end.path
+
+
+def test_guided_keyframe_retry_requires_revision_then_persists_prompts(components) -> None:
+    project = components.orchestrator.create_project(
+        ProjectCreate(idea="A waiter carries one bowl", duration_seconds=10)
+    )
+    components.orchestrator.plan_project(project.id)
+    approve_storyboard_and_references(components, project.id)
+    components.worker.run_until_idle()
+    scene = components.db.list_scenes(project.id)[0]
+
+    current = components.orchestrator.get_retry_prompts(scene.id, "keyframe")
+    assert current.end_prompt
+    proposal = components.orchestrator.revise_retry_prompts(
+        scene.id,
+        "keyframe",
+        RetryPromptRevisionRequest(
+            stage="keyframe",
+            feedback="Keep the bowl in the waiter's right hand",
+            start_prompt=current.start_prompt,
+            end_prompt=current.end_prompt,
+            negative_prompt=current.negative_prompt,
+        ),
+    )
+    assert "right hand" in proposal.end_prompt
+
+    retry = components.orchestrator.regenerate_keyframes(
+        scene.id,
+        RetryRequest(
+            changed_start_prompt=proposal.start_prompt,
+            changed_end_prompt=proposal.end_prompt,
+            changed_negative_prompt=proposal.negative_prompt,
+            feedback="Keep the bowl in the waiter's right hand",
+        ),
+    )
+    assert retry.payload["end_prompt_override"] == proposal.end_prompt
+    assert retry.payload["retry_feedback"].startswith("Keep the bowl")
+    components.worker.run_until_idle()
+    attempt = next(
+        item for item in components.db.list_attempts(project.id)
+        if item["job_id"] == retry.id
+    )
+    assert attempt["parameters"]["end_prompt_override"] == proposal.end_prompt
 
 
 def test_keyframe_regeneration_stops_and_rebuilds_connected_chain(components) -> None:

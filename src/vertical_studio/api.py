@@ -12,7 +12,8 @@ from .config import Settings, load_settings
 from .db import Database
 from .orchestrator import Orchestrator
 from .schemas import (ApprovalRequest, ArtifactSelection, PlanRequest, ProjectCreate,
-                      ProjectUpdate, RenderRequest, RetryRequest, SceneSpec)
+                      ProjectUpdate, RenderRequest, RetryPromptRevisionRequest,
+                      RetryRequest, SceneSpec)
 from .services.comfy import ComfyClient
 from .services.gpu import GpuCoordinator
 from .services.mock_comfy import MockComfyClient
@@ -167,9 +168,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try: return components.orchestrator.approve_keyframes(scene_id, request.selection, request.approval)
         except Exception as exc: fail(exc)
 
+    @app.get("/api/scenes/{scene_id}/retry-prompts/{stage}")
+    def retry_prompts(scene_id: str, stage: str):
+        try: return components.orchestrator.get_retry_prompts(scene_id, stage)
+        except Exception as exc: fail(exc)
+
+    @app.post("/api/scenes/{scene_id}/retry-prompts/{stage}/revise")
+    def revise_retry_prompts(
+        scene_id: str, stage: str, request: RetryPromptRevisionRequest
+    ):
+        try:
+            return components.orchestrator.revise_retry_prompts(
+                scene_id, stage, request
+            )
+        except Exception as exc:
+            fail(exc)
+
     @app.post("/api/scenes/{scene_id}/retry-keyframes")
-    def retry_keyframes(scene_id: str):
-        try: return components.orchestrator.regenerate_keyframes(scene_id)
+    def retry_keyframes(scene_id: str, request: RetryRequest):
+        try: return components.orchestrator.regenerate_keyframes(scene_id, request)
         except Exception as exc: fail(exc)
 
     @app.post("/api/scenes/{scene_id}/retry-video")

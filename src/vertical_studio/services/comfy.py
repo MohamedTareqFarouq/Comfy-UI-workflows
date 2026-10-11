@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import time
@@ -106,12 +107,21 @@ class ComfyClient:
                 )
         return patches
 
+    @staticmethod
+    def _upload_filename(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return f"{path.stem}-{digest.hexdigest()[:16]}{path.suffix}"
+
     def _upload_image(self, path: Path) -> str:
         try:
+            upload_name = self._upload_filename(path)
             with path.open("rb") as stream:
                 response = httpx.post(
                     f"{self.base_url}/upload/image",
-                    files={"image": (path.name, stream, "application/octet-stream")},
+                    files={"image": (upload_name, stream, "application/octet-stream")},
                     data={"overwrite": "true", "type": "input"},
                     timeout=120,
                 )
@@ -425,7 +435,10 @@ class ComfyClient:
         style_directive = self._style_directive(payload)
         negative_parts = list(spec.get("negative_constraints", []))
         negative_parts.append(self._style_negative(style))
-        common = {**payload, "negative_prompt": ", ".join(filter(None, negative_parts))}
+        resolved_negative = payload.get("negative_prompt_override")
+        if resolved_negative is None:
+            resolved_negative = ", ".join(filter(None, negative_parts))
+        common = {**payload, "negative_prompt": resolved_negative}
         canonical = list(payload.get("canonical_references", []))[:4]
         opening_canonical = list(
             payload.get("opening_canonical_references", canonical)
@@ -460,7 +473,7 @@ class ComfyClient:
                     self._reference_directive(opening_canonical)
                     if opening_canonical else ""
                 )
-                start_prompt = (
+                start_prompt = payload.get("start_prompt_override") or (
                     f"{style_directive}{count_rule}{reference_rule}"
                     "Create one coherent vertical scene, not a collage or reference sheet. "
                     f"{spec['narrative_purpose']}. Opening composition: {spec['start_composition']}. "
@@ -506,7 +519,7 @@ class ComfyClient:
             }
             end_references = [continuity_reference, *closing_canonical]
             closing_state = spec.get("closing_state") or spec["end_composition"]
-            end_prompt = (
+            end_prompt = payload.get("end_prompt_override") or (
                 f"{style_directive}{count_rule}{self._reference_directive(end_references)}"
                 "Create the closing keyframe of the same shot. Image 1 controls immediate "
                 f"composition and continuity. {spec['narrative_purpose']}. "
@@ -556,7 +569,7 @@ class ComfyClient:
         template = payload.get("template", "wan14b_lightx2v_flf2v_api")
         if payload.get("patches") is not None:
             return self._run(template, payload, output_dir)
-        self._load_template(template)
+        workflow = self._load_template(template)
 
         mapping = self._load_mapping(
             template,
@@ -572,23 +585,61 @@ class ComfyClient:
                 "output_prefix",
             },
         )
+        start_pointer = mapping["start_image"]
+        end_pointer = mapping["end_image"]
+        if isinstance(start_pointer, list):
+            start_pointer = start_pointer[0]
+        if isinstance(end_pointer, list):
+            end_pointer = end_pointer[0]
+        start_binding = (str(start_pointer["node_id"]), start_pointer["input"])
+        end_binding = (str(end_pointer["node_id"]), end_pointer["input"])
+        if start_binding == end_binding:
+            raise GenerationError("workflow_mapping_invalid", "start and end images map to the same Comfy input")
+        if workflow:
+            try:
+                start_node = workflow[start_binding[0]]
+                end_node = workflow[end_binding[0]]
+                flf_nodes = [
+                    node for node in workflow.values()
+                    if node.get("class_type") == "WanFirstLastFrameToVideo"
+                ]
+                correctly_connected = any(
+                    node.get("inputs", {}).get("start_image", [None])[0] == start_binding[0]
+                    and node.get("inputs", {}).get("end_image", [None])[0] == end_binding[0]
+                    for node in flf_nodes
+                )
+            except (KeyError, TypeError, IndexError) as exc:
+                raise GenerationError("workflow_mapping_invalid", "invalid Wan start/end node mapping") from exc
+            if (
+                start_node.get("class_type") != "LoadImage"
+                or end_node.get("class_type") != "LoadImage"
+                or not correctly_connected
+            ):
+                raise GenerationError(
+                    "workflow_mapping_invalid",
+                    "mapped start/end LoadImage nodes are not connected to WanFirstLastFrameToVideo in order",
+                )
         spec = payload["spec"]
         start_name = self._upload_image(Path(payload["start_image_path"]))
         end_name = self._upload_image(Path(payload["end_image_path"]))
         style = str(payload.get("visual_style", "")).strip()
-        action = payload.get("prompt_override") or (
+        prompt_override = payload.get("prompt_override")
+        action = (
             f"{spec['narrative_purpose']}. Motion: {spec['motion']}. "
             f"Camera: {spec.get('camera', 'stable camera')}."
         )
         negative_parts = list(spec.get("negative_constraints", []))
         negative_parts.append(self._style_negative(style))
+        negative_prompt = payload.get("negative_prompt_override")
+        if negative_prompt is None:
+            negative_prompt = ", ".join(filter(None, negative_parts))
         values = {
-            "prompt": (
+            "prompt": prompt_override or (
                 f"{self._style_directive(payload)}{action} Preserve the exact visual style of both "
                 "reference keyframes throughout the motion. Preserve identity, wardrobe, environment "
                 "and vertical composition."
             ),
-            "negative_prompt": ", ".join(filter(None, negative_parts)),
+            "negative_prompt": negative_prompt,
             "seed": int(payload["seed"]),
             "width": int(payload["width"]),
             "height": int(payload["height"]),
@@ -611,6 +662,13 @@ class ComfyClient:
                     "negative_prompt": values["negative_prompt"],
                     "start_image": str(payload["start_image_path"]),
                     "end_image": str(payload["end_image_path"]),
+                    "start_artifact_id": payload.get("start_artifact_id"),
+                    "end_artifact_id": payload.get("end_artifact_id"),
+                    "keyframe_binding": payload.get("keyframe_binding", {}),
+                    "comfy_inputs": {
+                        "start": {"uploaded_name": start_name, "node_id": start_binding[0], "input": start_binding[1]},
+                        "end": {"uploaded_name": end_name, "node_id": end_binding[0], "input": end_binding[1]},
+                    },
                     "seed": values["seed"],
                     "frames": values["frames"],
                 },

@@ -2,7 +2,7 @@
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#10131a"><title>Vertical Video Studio</title>
-<link rel="manifest" href="/manifest.webmanifest"><link rel="stylesheet" href="/styles.css?v=references-1">
+<link rel="manifest" href="/manifest.webmanifest"><link rel="stylesheet" href="/styles.css?v=guided-retry-1">
 </head><body>
 <header><div><span class="eyebrow">LOCAL PRODUCTION</span><h1>Vertical Video Studio</h1></div>
 <div class="header-actions"><a href="/observability.html">Observability</a><div id="runtime" class="status">Connecting...</div></div></header>
@@ -26,5 +26,17 @@
 <label>Source URLs (optional, one per line)<textarea name="source_urls" placeholder="https://example.com/source"></textarea></label>
 <div class="actions"><button type="button" data-close>Cancel</button><button class="primary">Create & plan</button></div>
 </form></dialog>
-<div id="toast"></div><script src="/app.js?v=references-1" defer></script>
+<dialog id="retry-dialog"><form id="retry-form">
+<input type="hidden" name="scene_id"><input type="hidden" name="stage"><input type="hidden" name="revision_rationale">
+<span class="eyebrow">GUIDED RETRY</span><h2 id="retry-title">Revise generation prompts</h2>
+<p id="retry-description" class="dialog-copy"></p>
+<label id="retry-start-field">Start-keyframe prompt<textarea name="start_prompt" class="prompt-editor"></textarea></label>
+<label id="retry-end-field">End-keyframe prompt<textarea name="end_prompt" class="prompt-editor"></textarea></label>
+<label id="retry-video-field">Video prompt<textarea name="video_prompt" class="prompt-editor"></textarea></label>
+<label>Negative prompt<textarea name="negative_prompt" class="prompt-editor compact"></textarea></label>
+<label>What was wrong?<textarea name="feedback" required minlength="2" placeholder="Describe the exact artifact, missing action, identity drift, or unwanted result."></textarea></label>
+<div id="retry-rationale" class="notice" hidden></div>
+<div class="actions"><button type="button" data-retry-close>Cancel</button><button type="button" id="revise-retry-prompts">Ask Qwen to revise</button><button type="submit" class="primary" disabled>Accept & regenerate</button></div>
+</form></dialog>
+<div id="toast"></div><script src="/app.js?v=guided-retry-1" defer></script>
 </body></html>

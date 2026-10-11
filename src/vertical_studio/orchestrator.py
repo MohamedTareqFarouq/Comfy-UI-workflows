@@ -4,9 +4,9 @@ from pathlib import Path
 from typing import Any
 from .config import Settings
 from .db import Database
-from .schemas import (ApprovalRequest, ArtifactSelection, CanonicalAssetSpec, ExecutionMode, Job, JobKind, JobState,
- PlanRequest, Project, ProjectCreate, ProjectState, ProjectUpdate, RenderRequest, RetryRequest,
- Scene, SceneSpec, SceneState, Storyboard)
+from .schemas import (ApprovalRequest, ArtifactKind, ArtifactSelection, CanonicalAssetSpec, ExecutionMode, Job, JobKind, JobState,
+ PlanRequest, Project, ProjectCreate, ProjectState, ProjectUpdate, RenderRequest, RetryPromptBundle,
+ RetryPromptRevisionRequest, RetryRequest, Scene, SceneSpec, SceneState, Storyboard)
 from .services.gpu import GpuCoordinator
 from .services.model_gateway import ModelGateway, ModelUnavailable
 from .services.research import BraveResearchProvider
@@ -391,7 +391,7 @@ class Orchestrator:
             stable_key("character_sheet", project_id, payload), payload,
         )
 
-    def queue_keyframes(self, scene_id: str) -> Job:
+    def queue_keyframes(self, scene_id: str, retry: RetryRequest | None = None) -> Job:
         scene = self.db.get_scene(scene_id)
         project = self.db.get_project(scene.project_id)
         active = self._active(scene_id, JobKind.KEYFRAME)
@@ -408,10 +408,122 @@ class Orchestrator:
                    "generation_mode": "anchor" if scene.spec.starts_new_continuity else "continuation",
                    "t2i_template": "flux_t2i_api",
                    "multiref_template_prefix": "flux_klein_multiref",
-                   "generation_round": len(prior) + 1}
+                   "generation_round": len(prior) + 1,
+                   "start_prompt_override": retry.changed_start_prompt if retry else None,
+                   "end_prompt_override": retry.changed_end_prompt if retry else None,
+                   "negative_prompt_override": retry.changed_negative_prompt if retry else None,
+                   "retry_feedback": retry.feedback if retry else "",
+                   "revision_rationale": retry.revision_rationale if retry else ""}
         return self.db.create_job(scene.project_id, JobKind.KEYFRAME, stable_key("keyframe", payload), payload, scene.id)
 
-    def regenerate_keyframes(self, scene_id: str) -> Job:
+    def get_retry_prompts(self, scene_id: str, stage: str) -> RetryPromptBundle:
+        if stage not in {"keyframe", "video"}:
+            raise ValueError("retry stage must be keyframe or video")
+        scene = self.db.get_scene(scene_id)
+        artifacts = self.db.list_artifacts(scene.project_id, scene.id)
+        if stage == "keyframe":
+            for artifact in reversed(artifacts):
+                if artifact.kind != ArtifactKind.IMAGE:
+                    continue
+                runs = artifact.metadata.get("runs", [])
+                if not runs:
+                    continue
+                candidate = artifact.metadata.get("candidate", 1)
+                matching = [run for run in runs if run.get("candidate") == candidate]
+                start = next((run for run in matching if run.get("role") == "start"), None)
+                end = next((run for run in matching if run.get("role") == "end"), None)
+                if end:
+                    return RetryPromptBundle(
+                        stage="keyframe",
+                        start_prompt=start.get("prompt") if start else None,
+                        end_prompt=end.get("prompt"),
+                        negative_prompt=end.get("negative_prompt", ""),
+                    )
+            return RetryPromptBundle(
+                stage="keyframe",
+                start_prompt=(
+                    scene.spec.start_composition if scene.spec.starts_new_continuity else None
+                ),
+                end_prompt=scene.spec.end_composition,
+                negative_prompt=", ".join(scene.spec.negative_constraints),
+            )
+        for artifact in reversed(artifacts):
+            if artifact.kind != ArtifactKind.VIDEO:
+                continue
+            audit = artifact.metadata.get("prompt_audit")
+            if audit:
+                return RetryPromptBundle(
+                    stage="video",
+                    video_prompt=audit.get("prompt", ""),
+                    negative_prompt=audit.get("negative_prompt", ""),
+                )
+        return RetryPromptBundle(
+            stage="video",
+            video_prompt=(
+                f"{scene.spec.narrative_purpose}. Motion: {scene.spec.motion}. "
+                f"Camera: {scene.spec.camera}."
+            ),
+            negative_prompt=", ".join(scene.spec.negative_constraints),
+        )
+
+    def revise_retry_prompts(
+        self, scene_id: str, stage: str, request: RetryPromptRevisionRequest
+    ) -> RetryPromptBundle:
+        if stage != request.stage:
+            raise ValueError("retry stage does not match the prompt revision request")
+        scene = self.db.get_scene(scene_id)
+        current = RetryPromptBundle(
+            stage=request.stage,
+            start_prompt=request.start_prompt,
+            end_prompt=request.end_prompt,
+            video_prompt=request.video_prompt,
+            negative_prompt=request.negative_prompt,
+        )
+        if self.settings.is_simulation:
+            correction = f" Address this user feedback explicitly: {request.feedback.strip()}"
+            return current.model_copy(update={
+                "start_prompt": (
+                    f"{current.start_prompt}{correction}" if current.start_prompt else None
+                ),
+                "end_prompt": (
+                    f"{current.end_prompt}{correction}" if current.end_prompt else None
+                ),
+                "video_prompt": (
+                    f"{current.video_prompt}{correction}" if current.video_prompt else None
+                ),
+                "rationale": "Simulation revision appended the requested correction.",
+            })
+        reports = [
+            report["report"] for report in self.db.list_qa_reports(scene.project_id)
+            if report["scene_id"] == scene.id
+        ]
+        with self.gpu.qwen():
+            proposal = self.model.generate_structured(
+                RetryPromptBundle,
+                system=(
+                    f"Revise only the {stage} generation prompts for one existing scene. "
+                    "The user has already selected the generation stage; never choose or recommend "
+                    "another stage. Preserve the story beat, approved identities, wardrobe, object "
+                    "ownership, environment locks and visual style. Make concrete prompt changes that "
+                    "address the feedback. Strengthen the negative prompt for unwanted outcomes. "
+                    "For keyframes, return the provided start prompt unchanged when it is null and "
+                    "revise the end prompt; revise a non-null start prompt only when feedback requires it. "
+                    f"The stage field must be {stage}. Return JSON only."
+                ),
+                context=json.dumps({
+                    "scene": scene.spec.model_dump(),
+                    "current_prompts": current.model_dump(),
+                    "user_feedback": request.feedback,
+                    "latest_visual_review": reports[-1] if reports else None,
+                }),
+            )
+        if proposal.stage != stage:
+            raise ValueError("Qwen returned a prompt revision for the wrong stage")
+        return proposal
+
+    def regenerate_keyframes(
+        self, scene_id: str, retry: RetryRequest | None = None
+    ) -> Job:
         scene = self.db.get_scene(scene_id)
         if scene.state not in {
             SceneState.KEYFRAMES_READY, SceneState.KEYFRAMES_APPROVED,
@@ -421,7 +533,7 @@ class Orchestrator:
         _affected, interrupted = self.db.invalidate_keyframe_chain(scene_id)
         if interrupted:
             self.gpu.generator.interrupt()
-        return self.queue_keyframes(scene_id)
+        return self.queue_keyframes(scene_id, retry)
 
     def approve_keyframes(self, scene_id: str, selection: ArtifactSelection, request: ApprovalRequest) -> Scene:
         scene = self.db.get_scene(scene_id)
@@ -432,6 +544,18 @@ class Orchestrator:
             return self.db.get_scene(scene.id)
         if not selection.start_artifact_id or not selection.end_artifact_id:
             raise ValueError("select start and end keyframes")
+        selected_start = self.db.get_artifact(selection.start_artifact_id)
+        selected_end = self.db.get_artifact(selection.end_artifact_id)
+        if selected_start.id == selected_end.id:
+            raise ValueError("start and end keyframes must be different artifacts")
+        if selected_start.metadata.get("role") != "start":
+            raise ValueError("selected start artifact is not a start keyframe")
+        if selected_end.metadata.get("role") != "end":
+            raise ValueError("selected end artifact is not an end keyframe")
+        start_candidate = selected_start.metadata.get("candidate")
+        end_candidate = selected_end.metadata.get("candidate")
+        if start_candidate != end_candidate:
+            raise ValueError("select start and end keyframes from the same candidate")
         if not scene.spec.starts_new_continuity:
             scenes = self.db.list_scenes(scene.project_id)
             index = next(i for i, item in enumerate(scenes) if item.id == scene.id)
@@ -440,7 +564,6 @@ class Orchestrator:
                 raise ValueError("continuation scene does not follow its continuity group")
             if previous.state != SceneState.KEYFRAMES_APPROVED or not previous.selected_end_artifact_id:
                 raise ValueError("approve the previous connected scene first")
-            selected_start = self.db.get_artifact(selection.start_artifact_id)
             if selected_start.metadata.get("shared_from_artifact_id") != previous.selected_end_artifact_id:
                 raise ValueError("select the start frame that exactly matches the previous approved end frame")
         self.db.record_approval(scene.project_id, "keyframes", True, request.notes, scene.id)
@@ -473,6 +596,12 @@ class Orchestrator:
         if active: return active
         if not scene.selected_start_artifact_id or not scene.selected_end_artifact_id:
             raise ValueError("approved keyframes required")
+        start = self.db.get_artifact(scene.selected_start_artifact_id)
+        end = self.db.get_artifact(scene.selected_end_artifact_id)
+        if start.metadata.get("role") != "start" or end.metadata.get("role") != "end":
+            raise ValueError("approved keyframe roles are invalid; select start and end again")
+        if start.id == end.id:
+            raise ValueError("approved start and end keyframes are the same artifact")
         if scene.state != SceneState.VIDEO_QUEUED:
             scene = self.db.transition_scene(scene.id, SceneState.VIDEO_QUEUED)
         prior = [j for j in self.db.list_jobs(scene.project_id) if j.scene_id == scene.id and j.kind == JobKind.VIDEO]
@@ -480,10 +609,19 @@ class Orchestrator:
         payload = {"scene_id": scene.id, "scene_revision": scene.revision, "spec": scene.spec.model_dump(),
           "visual_style": project.visual_style,
           "start_artifact_id": scene.selected_start_artifact_id, "end_artifact_id": scene.selected_end_artifact_id,
+          "keyframe_binding": {
+              "start": {"artifact_id": start.id, "sha256": start.sha256, "role": "start", "path": start.path},
+              "end": {"artifact_id": end.id, "sha256": end.sha256, "role": "end", "path": end.path},
+              "identical_content": start.sha256 == end.sha256,
+          },
           "attempt": ordinal, "duration_seconds": scene.spec.duration_seconds, "width": 384, "height": 672,
           "fps": 16, "frames": 49, "template": "wan14b_lightx2v_flf2v_api",
           "workflow_profile": "wan14b-lightx2v-4step-unqualified",
-          "prompt_override": retry.changed_prompt if retry else None, "new_seed": retry.new_seed if retry else True}
+          "prompt_override": retry.changed_prompt if retry else None,
+          "negative_prompt_override": retry.changed_negative_prompt if retry else None,
+          "retry_feedback": retry.feedback if retry else "",
+          "revision_rationale": retry.revision_rationale if retry else "",
+          "new_seed": retry.new_seed if retry else True}
         return self.db.create_job(scene.project_id, JobKind.VIDEO, stable_key("video", scene.id, ordinal, payload), payload, scene.id)
 
     def approve_scene(self, scene_id: str, request: ApprovalRequest) -> Scene:

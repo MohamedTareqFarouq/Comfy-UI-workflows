@@ -301,6 +301,24 @@ class Worker:
         seed = random.randrange(1, 2**31)
         start = self.db.get_artifact(job.payload["start_artifact_id"])
         end = self.db.get_artifact(job.payload["end_artifact_id"])
+        binding = job.payload.get("keyframe_binding", {})
+        for role, artifact in (("start", start), ("end", end)):
+            expected = binding.get(role, {})
+            if artifact.kind != ArtifactKind.IMAGE or artifact.scene_id != job.scene_id:
+                raise GenerationError("keyframe_binding_invalid", f"{role} keyframe is not an image from this scene")
+            if artifact.metadata.get("role") != role:
+                raise GenerationError("keyframe_binding_invalid", f"{role} keyframe has role {artifact.metadata.get('role')!r}")
+            if expected and (
+                expected.get("artifact_id") != artifact.id
+                or expected.get("sha256") != artifact.sha256
+                or expected.get("path") != artifact.path
+            ):
+                raise GenerationError("keyframe_binding_changed", f"{role} keyframe changed after video was queued")
+            path = Path(artifact.path)
+            if not path.is_file() or sha256_file(path) != artifact.sha256:
+                raise GenerationError("keyframe_file_changed", f"{role} keyframe file is missing or no longer matches its hash")
+        if start.id == end.id:
+            raise GenerationError("keyframe_binding_invalid", "start and end keyframes are the same artifact")
         generation_payload = {
             **job.payload,
             "seed": seed,

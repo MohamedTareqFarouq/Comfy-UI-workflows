@@ -317,8 +317,39 @@ class ArtifactSelection(BaseModel):
     video_artifact_id: str | None = None
 
 
+class RetryPromptBundle(BaseModel):
+    stage: Literal["keyframe", "video"]
+    start_prompt: str | None = Field(default=None, max_length=8000)
+    end_prompt: str | None = Field(default=None, max_length=8000)
+    video_prompt: str | None = Field(default=None, max_length=8000)
+    negative_prompt: str = Field(default="", max_length=4000)
+    rationale: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_stage_prompts(self) -> "RetryPromptBundle":
+        if self.stage == "keyframe" and not self.end_prompt:
+            raise ValueError("keyframe prompt bundles require an end prompt")
+        if self.stage == "video" and not self.video_prompt:
+            raise ValueError("video prompt bundles require a video prompt")
+        return self
+
+
+class RetryPromptRevisionRequest(BaseModel):
+    stage: Literal["keyframe", "video"]
+    feedback: str = Field(min_length=1, max_length=4000)
+    start_prompt: str | None = Field(default=None, max_length=8000)
+    end_prompt: str | None = Field(default=None, max_length=8000)
+    video_prompt: str | None = Field(default=None, max_length=8000)
+    negative_prompt: str = Field(default="", max_length=4000)
+
+
 class RetryRequest(BaseModel):
-    changed_prompt: str | None = Field(default=None, max_length=4000)
+    changed_prompt: str | None = Field(default=None, max_length=8000)
+    changed_start_prompt: str | None = Field(default=None, max_length=8000)
+    changed_end_prompt: str | None = Field(default=None, max_length=8000)
+    changed_negative_prompt: str | None = Field(default=None, max_length=4000)
+    feedback: str = Field(default="", max_length=4000)
+    revision_rationale: str = Field(default="", max_length=2000)
     new_seed: bool = True
 
 

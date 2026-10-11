@@ -365,6 +365,137 @@ def test_flux_edit_receives_previous_frame_character_sheet_and_style(monkeypatch
     assert "photorealistic" in values["prompt"]
 
 
+def test_comfy_upload_names_do_not_collide_for_same_basename(tmp_path: Path) -> None:
+    first_dir = tmp_path / "previous"
+    second_dir = tmp_path / "current"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    start = first_dir / "candidate-1-end.png"
+    end = second_dir / "candidate-1-end.png"
+    start.write_bytes(b"start-frame-content")
+    end.write_bytes(b"end-frame-content")
+
+    start_name = ComfyClient._upload_filename(start)
+    end_name = ComfyClient._upload_filename(end)
+
+    assert start_name != end_name
+    assert start_name.startswith("candidate-1-end-")
+    assert end_name.startswith("candidate-1-end-")
+
+
+def test_wan_retry_uses_accepted_full_prompts_without_wrapping(
+    monkeypatch, tmp_path: Path
+) -> None:
+    client = ComfyClient("http://127.0.0.1:1", tmp_path)
+    start = tmp_path / "start.png"
+    end = tmp_path / "end.png"
+    start.write_bytes(b"start")
+    end.write_bytes(b"end")
+    captured: dict = {}
+    monkeypatch.setattr(client, "_load_template", lambda _template: {})
+    monkeypatch.setattr(
+        client, "_load_mapping",
+        lambda _template, required: {
+            name: {"node_id": name, "input": name} for name in required
+        },
+    )
+    monkeypatch.setattr(client, "_upload_image", lambda path: Path(path).name)
+
+    def fake_run(_template: str, payload: dict, output: Path) -> GenerationResult:
+        captured["values"] = {
+            patch["input"]: patch["value"] for patch in payload["patches"]
+        }
+        output.mkdir(parents=True, exist_ok=True)
+        result = output / "clip.mp4"
+        result.write_bytes(b"video")
+        return GenerationResult(files=[result], metadata={})
+
+    monkeypatch.setattr(client, "_run", fake_run)
+    client.generate_video(
+        tmp_path / "video",
+        {
+            "scene_id": "scene-1",
+            "spec": {
+                "narrative_purpose": "Serve dinner",
+                "motion": "Place the bowl",
+                "negative_constraints": [],
+            },
+            "visual_style": "stylized 3D animation",
+            "prompt_override": "ACCEPTED FULL POSITIVE PROMPT",
+            "negative_prompt_override": "ACCEPTED NEGATIVE PROMPT",
+            "start_image_path": str(start),
+            "end_image_path": str(end),
+            "seed": 7,
+            "width": 384,
+            "height": 672,
+            "frames": 49,
+            "attempt": 2,
+        },
+    )
+    assert captured["values"]["prompt"] == "ACCEPTED FULL POSITIVE PROMPT"
+    assert captured["values"]["negative_prompt"] == "ACCEPTED NEGATIVE PROMPT"
+
+
+def test_real_wan_workflow_binds_start_and_end_nodes_in_order(
+    monkeypatch, tmp_path: Path
+) -> None:
+    workflow_dir = Path(__file__).parents[1] / "workflows"
+    client = ComfyClient("http://127.0.0.1:1", workflow_dir)
+    start = tmp_path / "start.png"
+    end = tmp_path / "end.png"
+    start.write_bytes(b"start")
+    end.write_bytes(b"end")
+    captured: dict = {}
+
+    monkeypatch.setattr(
+        client, "_upload_image", lambda path: f"uploaded-{Path(path).name}"
+    )
+
+    def fake_run(_template: str, payload: dict, output: Path) -> GenerationResult:
+        captured["patches"] = payload["patches"]
+        output.mkdir(parents=True, exist_ok=True)
+        result = output / "clip.mp4"
+        result.write_bytes(b"video")
+        return GenerationResult(files=[result], metadata={})
+
+    monkeypatch.setattr(client, "_run", fake_run)
+    result = client.generate_video(
+        tmp_path / "video",
+        {
+            "scene_id": "scene-1",
+            "spec": {
+                "narrative_purpose": "Cross the room",
+                "motion": "Walk from the opening pose to the closing pose",
+                "negative_constraints": [],
+            },
+            "visual_style": "stylized animation",
+            "start_artifact_id": "start-artifact",
+            "end_artifact_id": "end-artifact",
+            "keyframe_binding": {
+                "start": {"artifact_id": "start-artifact", "sha256": "start-hash"},
+                "end": {"artifact_id": "end-artifact", "sha256": "end-hash"},
+            },
+            "start_image_path": str(start),
+            "end_image_path": str(end),
+            "seed": 8,
+            "width": 384,
+            "height": 672,
+            "frames": 49,
+        },
+    )
+    patches = {
+        (str(patch["node_id"]), patch["input"]): patch["value"]
+        for patch in captured["patches"]
+    }
+    assert patches[("68", "image")] == "uploaded-start.png"
+    assert patches[("62", "image")] == "uploaded-end.png"
+    audit = result.metadata["prompt_audit"]
+    assert audit["start_artifact_id"] == "start-artifact"
+    assert audit["end_artifact_id"] == "end-artifact"
+    assert audit["comfy_inputs"]["start"]["node_id"] == "68"
+    assert audit["comfy_inputs"]["end"]["node_id"] == "62"
+
+
 def test_wan_prompt_enforces_project_style(monkeypatch, tmp_path: Path) -> None:
     client = ComfyClient("http://127.0.0.1:1", tmp_path)
     start = tmp_path / "start.png"
