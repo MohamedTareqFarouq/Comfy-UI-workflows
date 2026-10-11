@@ -243,8 +243,67 @@ def test_structured_retry_shows_qwen_the_exact_schema(monkeypatch, tmp_path: Pat
     assert '"summary"' in requests[0]["messages"][0]["content"]
     assert '"scenes"' in requests[0]["messages"][0]["content"]
     correction = requests[1]["messages"][-1]["content"]
-    assert "do not add a wrapper object" in correction
-    assert '"start_composition"' in correction
+    assert "Regenerate the complete object from scratch" in correction
+    assert "JSON Schema is already present in the system message" in correction
+    assert "Validation error" in correction
+
+
+def test_structured_generation_recovers_from_two_malformed_json_responses(
+    monkeypatch, tmp_path: Path
+) -> None:
+    valid = {
+        "summary": "Compact recovery storyboard",
+        "requires_character_sheet": False,
+        "character_sheet_prompt": "",
+        "character_bible": {},
+        "scenes": [
+            {
+                "title": f"Scene {index}",
+                "narrative_purpose": "Advance the story",
+                "duration_seconds": 3,
+                "start_composition": "Opening frame",
+                "end_composition": "Closing frame",
+                "motion": "One action",
+                "continuity_group": "main",
+                "starts_new_continuity": index == 1,
+                "transition_from_previous": "new_sequence" if index == 1 else "continuous",
+            }
+            for index in range(1, 4)
+        ],
+    }
+    responses = ['{"summary": "broken" "scenes": []}', '{"summary":', json.dumps(valid)]
+    requests: list[dict] = []
+
+    class Response:
+        def __init__(self, content: str):
+            self.content = content
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"choices": [{"message": {"content": self.content}}]}
+
+    def fake_post(*_args, **kwargs):
+        requests.append(json.loads(json.dumps(kwargs["json"])))
+        return Response(responses.pop(0))
+
+    gateway = ModelGateway(
+        "http://127.0.0.1:8080", "qwen", log_path=tmp_path / "qwen.log"
+    )
+    monkeypatch.setattr(gateway, "ensure_available", lambda: None)
+    monkeypatch.setattr("vertical_studio.services.model_gateway.httpx.post", fake_post)
+
+    storyboard = gateway.generate_structured(
+        Storyboard, system="Create a storyboard.", context="A compact story."
+    )
+
+    assert storyboard.summary == valid["summary"]
+    assert len(requests) == 3
+    assert requests[2]["temperature"] == 0
+    final_correction = requests[2]["messages"][-1]["content"]
+    assert "fewest scenes permitted" in final_correction
+    assert all(message["role"] != "assistant" for message in requests[2]["messages"])
 
 
 def test_flux_edit_receives_previous_frame_character_sheet_and_style(monkeypatch, tmp_path: Path) -> None:

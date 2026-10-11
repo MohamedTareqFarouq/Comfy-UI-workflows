@@ -150,9 +150,10 @@ class ModelGateway:
             "max_tokens": max_tokens,
             "response_format": {"type": "json_schema", "schema": schema},
         }
+        base_messages = list(payload["messages"])
         last_error: Exception | None = None
         last_content = ""
-        for attempt in range(2):
+        for attempt in range(3):
             try:
                 response = httpx.post(
                     f"{self.base_url}/v1/chat/completions",
@@ -167,28 +168,35 @@ class ModelGateway:
                     "request": payload,
                     "raw_response": last_content,
                     "parsed_response": parsed.model_dump(mode="json"),
+                    "structured_attempt": attempt + 1,
                 }
                 return parsed
-            except (httpx.HTTPError, KeyError, ValueError, json.JSONDecodeError) as exc:
+            except (httpx.HTTPError, KeyError, ValueError) as exc:
                 last_error = exc
-                if attempt == 0 and last_content:
-                    payload["messages"].extend(
-                        [
-                            {"role": "assistant", "content": last_content},
-                            {
-                                "role": "user",
-                                "content": (
-                                    "Your previous JSON failed validation. Return a completely "
-                                    "corrected JSON object only. Use the exact field names in this "
-                                    "JSON Schema and do not add a wrapper object:\n"
-                                    + schema_text
-                                    + "\nValidation error:\n"
-                                    + str(exc)[:1200]
-                                ),
-                            },
-                        ]
+                if attempt < 2 and last_content:
+                    economy = (
+                        " On this final attempt, use the fewest scenes permitted by the schema "
+                        "and keep descriptions concise so the complete object fits in context."
+                        if attempt == 1 else ""
                     )
+                    payload["messages"] = [
+                        *base_messages,
+                        {
+                            "role": "user",
+                            "content": (
+                                "Regenerate the complete object from scratch as strict JSON. "
+                                "The previous response was discarded because it was malformed or "
+                                "failed schema validation. Do not add Markdown, commentary, a "
+                                "wrapper object, trailing commas, or unescaped line breaks. The "
+                                "JSON Schema is already present in the system message."
+                                + economy
+                                + "\nValidation error:\n"
+                                + str(exc)[:1200]
+                            ),
+                        },
+                    ]
                     payload["temperature"] = 0
+                    last_content = ""
                     continue
                 break
         self._record_invalid_response(last_content, last_error)
