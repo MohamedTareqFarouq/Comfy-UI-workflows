@@ -72,6 +72,10 @@ function projectListActivity(project){
 function projectActivity(detail){
   if(state.operation)return state.operation;
   const {project,jobs=[],scenes=[]}=detail;
+  if(scenes.length&&scenes.every(scene=>scene.state==="approved")&&
+      !["rendering","complete"].includes(project.state)){
+    return {tone:"waiting",title:"Waiting for you",detail:"All scenes are approved; render the final video"};
+  }
   const running=[...jobs].reverse().find(job=>job.state==="running");
   if(running){
     return {tone:"working",title:"Working",detail:jobLabels[running.kind]||`Running ${running.kind}`};
@@ -316,6 +320,7 @@ function renderDetail(){
   q("#project-view").hidden=false;
 
   const actions=[];
+  const allScenesApproved=scenes.length&&scenes.every(scene=>scene.state==="approved");
   if(project.state==="draft"||project.state==="planning"){
     actions.push('<button class="primary" data-action="plan">Plan storyboard</button>');
   }
@@ -324,7 +329,8 @@ function renderDetail(){
     actions.push('<button data-action="regenerate-story">Regenerate storyboard</button>');
     actions.push('<button data-action="edit-project">Edit project</button>');
   }
-  if(project.state==="final_review"){
+  if(project.state==="final_review"||(
+      allScenesApproved&&!["rendering","complete"].includes(project.state))){
     actions.push('<button class="primary" data-action="render">Render final</button>');
   }
   if(project.state==="paused"){

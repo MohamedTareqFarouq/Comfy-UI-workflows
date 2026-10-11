@@ -178,7 +178,12 @@ class Worker:
             self.db.finish_attempt(attempt, "succeeded")
             self.db.transition_scene(job.scene_id, SceneState.KEYFRAMES_READY)
             scenes = self.db.list_scenes(job.project_id)
-            if all(s.state == SceneState.KEYFRAMES_READY for s in scenes) and self.db.get_project(job.project_id).state == ProjectState.REFERENCES:
+            reviewable = {
+                SceneState.KEYFRAMES_READY, SceneState.KEYFRAMES_APPROVED,
+                SceneState.VIDEO_QUEUED, SceneState.VIDEO_READY,
+                SceneState.QA_FAILED, SceneState.APPROVED,
+            }
+            if all(s.state in reviewable for s in scenes) and self.db.get_project(job.project_id).state == ProjectState.REFERENCES:
                 self.db.transition_project(job.project_id, ProjectState.CONTACT_SHEET_REVIEW)
         except Exception as exc:
             self.db.finish_attempt(attempt, "failed", {"message": str(exc)})
@@ -216,7 +221,11 @@ class Worker:
             review_args = {
                 "context": {
                     "scene": scene.spec.model_dump(),
-                    "character_bible": self.db.get_character_bible(job.project_id),
+                    "character_bible": {
+                        key: value
+                        for key, value in self.db.get_character_bible(job.project_id).items()
+                        if not key.startswith("_")
+                    },
                     "criteria": [
                         "prompt adherence", "identity and wardrobe", "environment",
                         "anatomy and unwanted text", "temporal consistency",

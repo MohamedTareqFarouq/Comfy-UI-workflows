@@ -16,6 +16,12 @@ def test_pwa_and_project_api_contract(components) -> None:
         assert "projectActivity" in script.text
         assert "Planning storyboard with Qwen" in script.text
 
+        observability = client.get("/observability.html")
+        assert observability.status_code == 200
+        assert "Prompt and decision audit" in observability.text
+        audit_script = client.get("/observability.js")
+        assert audit_script.status_code == 200
+
         created = client.post(
             "/api/projects",
             json={
@@ -40,6 +46,9 @@ def test_pwa_and_project_api_contract(components) -> None:
         assert "attempts" in body
         assert "approvals" in body
         assert "render_manifests" in body
+        trace = body["character_bible"]["_prompt_audit"]["qwen_storyboard"]
+        assert trace["model"] == "simulation-fallback"
+        assert trace["parsed_response"]["scenes"]
 
 
 def test_storyboard_edit_regenerate_retry_and_delete(components) -> None:

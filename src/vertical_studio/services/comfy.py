@@ -369,7 +369,12 @@ class ComfyClient:
                     start_result, output_dir / f"candidate-{candidate}-start"
                 )
                 files.append(start_path)
-                runs.append({"candidate": candidate, "role": "start", **start_result.metadata})
+                runs.append({
+                    "candidate": candidate, "role": "start",
+                    "prompt": start_prompt,
+                    "negative_prompt": common["negative_prompt"],
+                    **start_result.metadata,
+                })
             else:
                 if candidate not in source_frames:
                     raise GenerationError(
@@ -393,7 +398,14 @@ class ComfyClient:
             )
             end_path = self._move_first(end_result, output_dir / f"candidate-{candidate}-end")
             files.append(end_path)
-            runs.append({"candidate": candidate, "role": "end", **end_result.metadata})
+            runs.append({
+                "candidate": candidate, "role": "end",
+                "prompt": edit_prompt,
+                "negative_prompt": common["negative_prompt"],
+                "source_image": str(start_path),
+                "character_sheet": str(sheet) if sheet else None,
+                **end_result.metadata,
+            })
         return GenerationResult(files=files, metadata={"runs": runs, "generation_mode": mode})
 
     def generate_video(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult:
@@ -441,10 +453,24 @@ class ComfyClient:
             "end_image": end_name,
             "output_prefix": f"{payload['scene_id']}-attempt-{payload.get('attempt', 1)}",
         }
-        return self._run(
+        result = self._run(
             template,
             {**payload, "patches": self._mapped_patches(mapping, values)},
             output_dir,
+        )
+        return GenerationResult(
+            files=result.files,
+            metadata={
+                **result.metadata,
+                "prompt_audit": {
+                    "prompt": values["prompt"],
+                    "negative_prompt": values["negative_prompt"],
+                    "start_image": str(payload["start_image_path"]),
+                    "end_image": str(payload["end_image_path"]),
+                    "seed": values["seed"],
+                    "frames": values["frames"],
+                },
+            },
         )
 
     def interrupt(self) -> None:

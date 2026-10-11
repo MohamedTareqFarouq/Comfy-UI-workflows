@@ -7,6 +7,7 @@ cd "$ROOT"
 "$VVS_PYTHON_BIN" -m compileall -q src tests
 if command -v node >/dev/null 2>&1; then
   node --check src/vertical_studio/static/app.js
+  node --check src/vertical_studio/static/observability.js
 fi
 "$VVS_PYTHON_BIN" -m pytest -o addopts="" -ra
 TEST_DATA="$(mktemp -d)"

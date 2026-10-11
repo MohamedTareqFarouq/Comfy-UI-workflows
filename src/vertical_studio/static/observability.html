@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#10131a"><title>Model Observability - Vertical Video Studio</title>
+<link rel="stylesheet" href="/styles.css?v=observability-1">
+<link rel="stylesheet" href="/observability.css?v=observability-1">
+</head><body>
+<header><div><span class="eyebrow">MODEL OBSERVABILITY</span><h1>Prompt and decision audit</h1></div>
+<a class="audit-back" href="/">&larr; Production studio</a></header>
+<div class="audit-shell">
+  <section class="audit-toolbar">
+    <label>Project<select id="audit-project"></select></label>
+    <button id="audit-refresh">Refresh audit</button>
+    <span id="audit-status" class="status">Loading...</span>
+  </section>
+  <section class="audit-guide">
+    <b>How to locate a failure</b>
+    <span>If the Qwen scene specification is wrong, revise the storyboard. If it is correct but a keyframe is wrong, Flux missed the prompt. If both keyframes are correct but the action is wrong, Wan caused the motion error.</span>
+  </section>
+  <div id="audit-content"></div>
+</div>
+<script src="/observability.js?v=observability-1" defer></script>
+</body></html>

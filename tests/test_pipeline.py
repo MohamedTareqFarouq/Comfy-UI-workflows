@@ -98,6 +98,31 @@ def test_simulated_pipeline_completes_vertical_projects(components, duration: in
     assert components.db.get_project(project.id).state == ProjectState.COMPLETE
 
 
+def test_restart_reconciles_stale_project_milestones(components) -> None:
+    project = components.orchestrator.create_project(
+        ProjectCreate(idea="A connected scene survives a server restart", duration_seconds=10)
+    )
+    components.orchestrator.plan_project(project.id)
+    components.orchestrator.approve_storyboard(
+        project.id, ApprovalRequest(approved=True)
+    )
+    components.db.cancel_project_jobs(project.id)
+    for scene in components.db.list_scenes(project.id):
+        components.db.transition_scene(scene.id, SceneState.KEYFRAMES_READY)
+        components.db.transition_scene(scene.id, SceneState.KEYFRAMES_APPROVED)
+        components.db.transition_scene(scene.id, SceneState.VIDEO_QUEUED)
+        components.db.transition_scene(scene.id, SceneState.VIDEO_READY)
+        components.db.transition_scene(scene.id, SceneState.APPROVED)
+
+    assert components.db.get_project(project.id).state == ProjectState.REFERENCES
+    restarted = type(components)(components.settings)
+    restarted.start()
+    try:
+        assert restarted.db.get_project(project.id).state == ProjectState.FINAL_REVIEW
+    finally:
+        restarted.stop()
+
+
 def test_scene_video_retry_is_isolated(components) -> None:
     project = components.orchestrator.create_project(
         ProjectCreate(idea="Three connected portrait scenes", duration_seconds=10)

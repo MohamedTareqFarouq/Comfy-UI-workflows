@@ -58,6 +58,7 @@ class Components:
         self.thread: threading.Thread | None = None
 
     def start(self) -> None:
+        self.orchestrator.reconcile_all_project_states()
         if not self.thread or not self.thread.is_alive():
             self.thread = threading.Thread(target=self.worker.serve, daemon=True, name="vertical-studio-worker")
             self.thread.start()

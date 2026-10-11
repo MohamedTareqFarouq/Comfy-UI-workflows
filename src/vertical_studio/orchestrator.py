@@ -20,6 +20,48 @@ class Orchestrator:
         self.db, self.settings, self.model, self.research = db, settings, model, research
         self.gpu = gpu
 
+    def reconcile_project_state(self, project_id: str) -> Project:
+        """Advance persisted project milestones implied by completed scene states."""
+        scenes = self.db.list_scenes(project_id)
+        project = self.db.get_project(project_id)
+        if not scenes:
+            return project
+        keyframes_reviewable = {
+            SceneState.KEYFRAMES_READY, SceneState.KEYFRAMES_APPROVED,
+            SceneState.VIDEO_QUEUED, SceneState.VIDEO_READY,
+            SceneState.QA_FAILED, SceneState.APPROVED,
+        }
+        video_phase = {
+            SceneState.KEYFRAMES_APPROVED, SceneState.VIDEO_QUEUED,
+            SceneState.VIDEO_READY, SceneState.QA_FAILED, SceneState.APPROVED,
+        }
+        if project.state == ProjectState.REFERENCES and all(
+            scene.state in keyframes_reviewable for scene in scenes
+        ):
+            project = self.db.transition_project(
+                project_id, ProjectState.CONTACT_SHEET_REVIEW,
+                "reconciled completed keyframe generation",
+            )
+        if project.state == ProjectState.CONTACT_SHEET_REVIEW and all(
+            scene.state in video_phase for scene in scenes
+        ):
+            project = self.db.transition_project(
+                project_id, ProjectState.SCENES,
+                "reconciled completed keyframe approvals",
+            )
+        if project.state == ProjectState.SCENES and all(
+            scene.state == SceneState.APPROVED for scene in scenes
+        ):
+            project = self.db.transition_project(
+                project_id, ProjectState.FINAL_REVIEW,
+                "reconciled completed video approvals",
+            )
+        return project
+
+    def reconcile_all_project_states(self) -> None:
+        for project in self.db.list_projects():
+            self.reconcile_project_state(project.id)
+
     def create_project(self, request: ProjectCreate) -> Project:
         mode = ExecutionMode.SIMULATION if self.settings.is_simulation else ExecutionMode.REAL
         return self.db.create_project(request, mode)
@@ -51,6 +93,7 @@ class Orchestrator:
             project = self.db.transition_project(project_id, ProjectState.PLANNING, "revision")
         if project.state != ProjectState.PLANNING:
             raise ValueError(f"cannot plan from {project.state}")
+        self.model.last_trace = None
         storyboard = self._storyboard(
             project, research_context, (request or PlanRequest()).feedback
         )
@@ -60,6 +103,17 @@ class Orchestrator:
                 "requires_character_sheet": storyboard.requires_character_sheet,
                 "character_sheet_prompt": storyboard.character_sheet_prompt,
                 "visual_style": project.visual_style,
+            },
+            "_prompt_audit": {
+                "qwen_storyboard": self.model.last_trace or {
+                    "model": "simulation-fallback",
+                    "request": {
+                        "project": project.model_dump(mode="json"),
+                        "research": research_context,
+                        "revision_feedback": (request or PlanRequest()).feedback,
+                    },
+                    "parsed_response": storyboard.model_dump(mode="json"),
+                }
             },
         }
         self.db.replace_storyboard(project_id, storyboard.scenes, bible)
@@ -305,8 +359,7 @@ class Orchestrator:
             # This is the stage boundary: keep Flux resident through all image
             # generation/review, then free it once before any Wan job is queued.
             self.gpu.release_comfy()
-            if self.db.get_project(scene.project_id).state == ProjectState.CONTACT_SHEET_REVIEW:
-                self.db.transition_project(scene.project_id, ProjectState.SCENES)
+            self.reconcile_project_state(scene.project_id)
             for item in scenes:
                 self.queue_video(item.id)
         return scene
@@ -337,15 +390,13 @@ class Orchestrator:
         self.db.record_approval(scene.project_id, "video", request.approved, request.notes, scene.id)
         if request.approved:
             scene = self.db.transition_scene(scene.id, SceneState.APPROVED, "user approval")
-            if all(s.state == SceneState.APPROVED for s in self.db.list_scenes(scene.project_id)):
-                if self.db.get_project(scene.project_id).state == ProjectState.SCENES:
-                    self.db.transition_project(scene.project_id, ProjectState.FINAL_REVIEW)
+            self.reconcile_project_state(scene.project_id)
         else:
             self.queue_video(scene.id, RetryRequest())
         return scene
 
     def queue_render(self, project_id: str, request: RenderRequest) -> Job:
-        project = self.db.get_project(project_id)
+        project = self.reconcile_project_state(project_id)
         scenes = self.db.list_scenes(project_id)
         if project.state not in {ProjectState.FINAL_REVIEW, ProjectState.COMPLETE} or any(s.state != SceneState.APPROVED for s in scenes):
             raise ValueError("all scenes must be approved")

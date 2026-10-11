@@ -47,6 +47,7 @@ class ModelGateway:
         self._process: subprocess.Popen[bytes] | None = None
         self._lock = threading.RLock()
         self._log_stream: Any = None
+        self.last_trace: dict[str, Any] | None = None
 
     def health(self) -> dict[str, Any]:
         try:
@@ -160,7 +161,14 @@ class ModelGateway:
                 )
                 response.raise_for_status()
                 last_content = response.json()["choices"][0]["message"]["content"]
-                return self._parse_structured(output_type, last_content)
+                parsed = self._parse_structured(output_type, last_content)
+                self.last_trace = {
+                    "model": self.model,
+                    "request": payload,
+                    "raw_response": last_content,
+                    "parsed_response": parsed.model_dump(mode="json"),
+                }
+                return parsed
             except (httpx.HTTPError, KeyError, ValueError, json.JSONDecodeError) as exc:
                 last_error = exc
                 if attempt == 0 and last_content:
