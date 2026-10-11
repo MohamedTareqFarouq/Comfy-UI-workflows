@@ -110,6 +110,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "jobs": components.db.list_jobs(project_id),
                 "attempts": components.db.list_attempts(project_id),
                 "artifacts": components.db.list_artifacts(project_id),
+                "canonical_assets": components.db.list_canonical_assets(project_id),
                 "character_bible": components.db.get_character_bible(project_id),
                 "research_sources": components.db.list_research_sources(project_id),
                 "qa_reports": components.db.list_qa_reports(project_id),
@@ -153,6 +154,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def storyboard_approval(project_id: str, request: ApprovalRequest):
         try: return components.orchestrator.approve_storyboard(project_id, request)
         except Exception as exc: fail(exc)
+
+    @app.post("/api/projects/{project_id}/canonical-assets-approval")
+    def canonical_assets_approval(project_id: str, request: ApprovalRequest):
+        try:
+            return components.orchestrator.approve_canonical_assets(project_id, request)
+        except Exception as exc:
+            fail(exc)
 
     @app.post("/api/scenes/{scene_id}/keyframe-approval")
     def keyframe_approval(scene_id: str, request: KeyframeApproval):

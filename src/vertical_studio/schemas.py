@@ -52,6 +52,7 @@ class JobState(StrEnum):
 
 
 class JobKind(StrEnum):
+    CANONICAL_ASSET = "canonical_asset"
     CHARACTER_SHEET = "character_sheet"
     KEYFRAME = "keyframe"
     VIDEO = "video"
@@ -117,6 +118,23 @@ class SceneSpec(BaseModel):
     starts_new_continuity: bool = False
     continuity_reason: str = Field(default="continuous visual action", max_length=500)
     transition_from_previous: Literal["continuous", "cut", "crossfade", "new_sequence"] = "continuous"
+    reference_keys: list[str] = Field(default_factory=list)
+    characters_present: list[str] = Field(default_factory=list)
+    environment_key: str | None = None
+    important_props: list[str] = Field(default_factory=list)
+    character_count: int | None = Field(default=None, ge=0, le=8)
+    opening_state: str = Field(default="", max_length=1200)
+    closing_state: str = Field(default="", max_length=1200)
+    object_owner: str = Field(default="", max_length=500)
+    handoff_to_next_scene: str = Field(default="", max_length=1200)
+
+
+class CanonicalAssetSpec(BaseModel):
+    key: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    role: Literal["character", "environment", "prop", "style"]
+    label: str = Field(min_length=1, max_length=160)
+    prompt: str = Field(min_length=1, max_length=2000)
+    description: str = Field(default="", max_length=1200)
 
 
 class Storyboard(BaseModel):
@@ -124,6 +142,7 @@ class Storyboard(BaseModel):
     requires_character_sheet: bool
     character_sheet_prompt: str = Field(max_length=2000)
     character_bible: dict[str, Any] = Field(default_factory=dict)
+    canonical_assets: list[CanonicalAssetSpec] = Field(default_factory=list, max_length=16)
     scenes: list[SceneSpec] = Field(min_length=3, max_length=10)
 
     @model_validator(mode="after")
@@ -147,7 +166,32 @@ class Storyboard(BaseModel):
             previous = group
         if self.requires_character_sheet and not self.character_sheet_prompt.strip():
             raise ValueError("character_sheet_prompt is required when a character sheet is needed")
+        asset_keys = [asset.key for asset in self.canonical_assets]
+        if len(asset_keys) != len(set(asset_keys)):
+            raise ValueError("canonical asset keys must be unique")
+        if asset_keys:
+            known = set(asset_keys)
+            for scene in self.scenes:
+                unknown = set(scene.reference_keys) - known
+                if unknown:
+                    raise ValueError(
+                        f"scene references unknown canonical assets: {chr(44).join(sorted(unknown))}"
+                    )
         return self
+
+
+class CanonicalAsset(BaseModel):
+    id: str
+    project_id: str
+    key: str
+    role: Literal["character", "environment", "prop", "style"]
+    label: str
+    prompt: str
+    description: str = ""
+    artifact_id: str | None = None
+    approved: bool = False
+    created_at: str
+    updated_at: str
 
 
 class Scene(BaseModel):

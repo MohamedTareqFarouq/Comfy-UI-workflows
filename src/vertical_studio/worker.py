@@ -26,6 +26,7 @@ class Worker:
         if not job: return None
         try:
             {
+                JobKind.CANONICAL_ASSET: self._canonical_asset,
                 JobKind.CHARACTER_SHEET: self._character_sheet,
                 JobKind.KEYFRAME: self._keyframes,
                 JobKind.VIDEO: self._video,
@@ -75,6 +76,38 @@ class Worker:
                 result.setdefault(candidate, artifact)
         return result
 
+    def _canonical_asset(self, job: Job) -> None:
+        seed = random.randrange(1, 2**31)
+        payload = {**job.payload, "project_id": job.project_id, "seed": seed}
+        attempt = self.db.create_attempt(
+            job, "flux-t2i-canonical-reference-v1", seed, payload
+        )
+        try:
+            with self.gpu.comfy(reset_models=False):
+                result = self.generator.generate_reference_asset(
+                    self._dir(job, attempt), payload
+                )
+            path = result.files[0]
+            artifact = self.db.add_artifact(
+                job.project_id, ArtifactKind.IMAGE, path, sha256_file(path),
+                {
+                    **result.metadata,
+                    "role": "canonical_reference",
+                    "asset_key": payload["asset_key"],
+                    "asset_role": payload["asset_role"],
+                    "asset_label": payload["asset_label"],
+                    "prompt": payload["prompt"],
+                },
+                None, attempt,
+            )
+            self.db.attach_canonical_artifact(
+                payload["canonical_asset_id"], artifact.id
+            )
+            self.db.finish_attempt(attempt, "succeeded")
+        except Exception as exc:
+            self.db.finish_attempt(attempt, "failed", {"message": str(exc)})
+            raise
+
     def _character_sheet(self, job: Job) -> None:
         seed = random.randrange(1, 2**31)
         payload = {**job.payload, "project_id": job.project_id, "seed": seed}
@@ -98,18 +131,30 @@ class Worker:
         seed = random.randrange(1, 2**31)
         scene = self.db.get_scene(job.scene_id)
         generation_payload = {**job.payload, "seed": seed}
-        bible = self.db.get_character_bible(job.project_id)
-        plan = bible.get("_generation_plan", {})
-        sheets = [
-            artifact for artifact in self.db.list_artifacts(job.project_id)
-            if artifact.metadata.get("role") == "character_sheet"
+        registered = self.db.list_canonical_assets(job.project_id)
+        requested = set(scene.spec.reference_keys)
+        selected = [
+            asset for asset in registered
+            if asset.approved and asset.artifact_id
+            and (not requested or asset.key in requested)
         ]
-        if plan.get("requires_character_sheet"):
-            if not sheets:
-                raise GenerationError(
-                    "character_sheet_missing", "required character sheet was not generated"
-                )
-            generation_payload["character_sheet_path"] = sheets[-1].path
+        if registered and not selected:
+            raise GenerationError(
+                "canonical_references_missing",
+                "scene has no approved canonical references",
+            )
+        generation_payload["canonical_references"] = [
+            {
+                "asset_id": asset.id,
+                "artifact_id": asset.artifact_id,
+                "key": asset.key,
+                "role": asset.role,
+                "label": asset.label,
+                "description": asset.description,
+                "path": self.db.get_artifact(asset.artifact_id).path,
+            }
+            for asset in selected[:4]
+        ]
         if not scene.spec.starts_new_continuity:
             scenes = self.db.list_scenes(job.project_id)
             index = next(i for i, item in enumerate(scenes) if item.id == scene.id)
@@ -142,7 +187,7 @@ class Worker:
                     for candidate in range(1, candidates + 1)
                 ]
         attempt = self.db.create_attempt(
-            job, "flux-continuity-chain-v1", seed, generation_payload
+            job, "flux-klein-native-multireference-v1", seed, generation_payload
         )
         try:
             with self.gpu.comfy(reset_models=False):
@@ -166,13 +211,23 @@ class Worker:
                 tokens = path.stem.split("-")
                 candidate = int(tokens[1]) if len(tokens) > 2 and tokens[1].isdigit() else 1
                 role = tokens[-1] if tokens[-1] in {"start", "end"} else "candidate"
-                method = "t2i_anchor" if role == "start" else "flux_edit"
+                if generation_payload.get("canonical_references"):
+                    method = (
+                        "flux_klein_multireference_anchor"
+                        if role == "start"
+                        else "flux_klein_multireference_transition"
+                    )
+                else:
+                    method = "t2i_anchor" if role == "start" else "flux_edit"
                 self.db.add_artifact(
                     job.project_id, ArtifactKind.IMAGE, path, sha256_file(path),
                     {**result.metadata, "candidate": candidate, "role": role,
                      "generation_method": method,
                      "continuity_group": scene.spec.continuity_group,
-                     "uses_character_sheet": bool(generation_payload.get("character_sheet_path"))},
+                     "canonical_references": [
+                         {key: ref.get(key) for key in ("asset_id", "artifact_id", "key", "role", "label")}
+                         for ref in generation_payload.get("canonical_references", [])
+                     ]},
                     job.scene_id, attempt,
                 )
             self.db.finish_attempt(attempt, "succeeded")

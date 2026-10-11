@@ -81,5 +81,185 @@
       "node_id": "94",
       "input": "filename_prefix"
     }
+  },
+  "flux_klein_multiref_1_api": {
+    "prompt": {
+      "node_id": "4",
+      "input": "text"
+    },
+    "negative_prompt": [],
+    "seed": {
+      "node_id": "61",
+      "input": "noise_seed"
+    },
+    "width": [
+      {
+        "node_id": "60",
+        "input": "width"
+      },
+      {
+        "node_id": "63",
+        "input": "width"
+      }
+    ],
+    "height": [
+      {
+        "node_id": "60",
+        "input": "height"
+      },
+      {
+        "node_id": "63",
+        "input": "height"
+      }
+    ],
+    "output_prefix": {
+      "node_id": "67",
+      "input": "filename_prefix"
+    },
+    "reference_1": {
+      "node_id": "10",
+      "input": "image"
+    }
+  },
+  "flux_klein_multiref_2_api": {
+    "prompt": {
+      "node_id": "4",
+      "input": "text"
+    },
+    "negative_prompt": [],
+    "seed": {
+      "node_id": "61",
+      "input": "noise_seed"
+    },
+    "width": [
+      {
+        "node_id": "60",
+        "input": "width"
+      },
+      {
+        "node_id": "63",
+        "input": "width"
+      }
+    ],
+    "height": [
+      {
+        "node_id": "60",
+        "input": "height"
+      },
+      {
+        "node_id": "63",
+        "input": "height"
+      }
+    ],
+    "output_prefix": {
+      "node_id": "67",
+      "input": "filename_prefix"
+    },
+    "reference_1": {
+      "node_id": "10",
+      "input": "image"
+    },
+    "reference_2": {
+      "node_id": "11",
+      "input": "image"
+    }
+  },
+  "flux_klein_multiref_3_api": {
+    "prompt": {
+      "node_id": "4",
+      "input": "text"
+    },
+    "negative_prompt": [],
+    "seed": {
+      "node_id": "61",
+      "input": "noise_seed"
+    },
+    "width": [
+      {
+        "node_id": "60",
+        "input": "width"
+      },
+      {
+        "node_id": "63",
+        "input": "width"
+      }
+    ],
+    "height": [
+      {
+        "node_id": "60",
+        "input": "height"
+      },
+      {
+        "node_id": "63",
+        "input": "height"
+      }
+    ],
+    "output_prefix": {
+      "node_id": "67",
+      "input": "filename_prefix"
+    },
+    "reference_1": {
+      "node_id": "10",
+      "input": "image"
+    },
+    "reference_2": {
+      "node_id": "11",
+      "input": "image"
+    },
+    "reference_3": {
+      "node_id": "12",
+      "input": "image"
+    }
+  },
+  "flux_klein_multiref_4_api": {
+    "prompt": {
+      "node_id": "4",
+      "input": "text"
+    },
+    "negative_prompt": [],
+    "seed": {
+      "node_id": "61",
+      "input": "noise_seed"
+    },
+    "width": [
+      {
+        "node_id": "60",
+        "input": "width"
+      },
+      {
+        "node_id": "63",
+        "input": "width"
+      }
+    ],
+    "height": [
+      {
+        "node_id": "60",
+        "input": "height"
+      },
+      {
+        "node_id": "63",
+        "input": "height"
+      }
+    ],
+    "output_prefix": {
+      "node_id": "67",
+      "input": "filename_prefix"
+    },
+    "reference_1": {
+      "node_id": "10",
+      "input": "image"
+    },
+    "reference_2": {
+      "node_id": "11",
+      "input": "image"
+    },
+    "reference_3": {
+      "node_id": "12",
+      "input": "image"
+    },
+    "reference_4": {
+      "node_id": "13",
+      "input": "image"
+    }
   }
 }

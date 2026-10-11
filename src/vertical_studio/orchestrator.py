@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 from .config import Settings
 from .db import Database
-from .schemas import (ApprovalRequest, ArtifactSelection, ExecutionMode, Job, JobKind, JobState,
+from .schemas import (ApprovalRequest, ArtifactSelection, CanonicalAssetSpec, ExecutionMode, Job, JobKind, JobState,
  PlanRequest, Project, ProjectCreate, ProjectState, ProjectUpdate, RenderRequest, RetryRequest,
  Scene, SceneSpec, SceneState, Storyboard)
 from .services.gpu import GpuCoordinator
@@ -116,7 +116,9 @@ class Orchestrator:
                 }
             },
         }
-        self.db.replace_storyboard(project_id, storyboard.scenes, bible)
+        self.db.replace_storyboard(
+            project_id, storyboard.scenes, bible, storyboard.canonical_assets
+        )
         self.db.transition_project(project_id, ProjectState.STORYBOARD_REVIEW)
         return storyboard
 
@@ -142,11 +144,16 @@ class Orchestrator:
                             "the exact previous end frame. Start a new group for a new location, main "
                             "character, time jump, radical composition, or deliberate cut. The top-level "
                             "keys include summary, requires_character_sheet, character_sheet_prompt, "
-                            "character_bible, and scenes; never use a storyboard wrapper. Every scene uses title, "
+                            "character_bible, canonical_assets, and scenes; never use a storyboard wrapper. Every scene uses title, "
                             "narrative_purpose, duration_seconds, start_composition, "
                             "end_composition, motion, continuity_group, starts_new_continuity, "
                             "continuity_reason, and transition_from_previous; never substitute scene, "
-                            "duration, description, or beat. For every scene, describe both its opening keyframe in "
+                            "duration, description, or beat. Define reusable canonical_assets for every recurring "
+                            "character, environment and important prop. Each asset needs a stable lowercase key, "
+                            "role, label, clean single-subject generation prompt and description. Every scene must "
+                            "list only the canonical asset keys it needs in reference_keys, plus characters_present, "
+                            "environment_key, important_props, character_count, opening_state, closing_state, "
+                            "object_owner and handoff_to_next_scene. For every scene, describe both its opening keyframe in "
                             "start_composition and its closing keyframe in end_composition, plus "
                             "the motion connecting them. Apply revision feedback. Return JSON only."
                         ),
@@ -178,6 +185,12 @@ class Orchestrator:
             starts_new_continuity=n == 1,
             continuity_reason="First visual anchor" if n == 1 else "Same subject, location and continuous action",
             transition_from_previous="new_sequence" if n == 1 else "continuous",
+            reference_keys=["protagonist", "primary_environment"],
+            characters_present=["protagonist"],
+            environment_key="primary_environment",
+            character_count=1,
+            opening_state=f"The protagonist begins story beat {n}",
+            closing_state=f"The protagonist completes story beat {n}",
         ) for n in range(1, count + 1)]
         return Storyboard(
             summary=f"A {project.duration_seconds}-second vertical interpretation of {project.idea}",
@@ -188,6 +201,25 @@ class Orchestrator:
                 "wardrobe, proportions and neutral lighting"
             ),
             character_bible={"style": project.visual_style, "identity_rule": "Preserve face, silhouette, wardrobe, palette and proportions."},
+            canonical_assets=[
+                CanonicalAssetSpec(
+                    key="protagonist", role="character", label="Recurring protagonist",
+                    prompt=(
+                        f"{project.visual_style}. One clean three-quarter full-body identity reference of the "
+                        "recurring protagonist, neutral pose, consistent face, hair, wardrobe and proportions, "
+                        "plain neutral background, one person only, no text, no reference-sheet layout."
+                    ),
+                    description="The recurring protagonist identity and wardrobe anchor.",
+                ),
+                CanonicalAssetSpec(
+                    key="primary_environment", role="environment", label="Primary environment",
+                    prompt=(
+                        f"{project.visual_style}. Clean establishing reference of the main environment for: "
+                        f"{project.idea}. No people, no text, coherent architecture and lighting, vertical composition."
+                    ),
+                    description="The stable architecture, palette and lighting anchor.",
+                ),
+            ],
             scenes=scenes,
         )
 
@@ -221,6 +253,10 @@ class Orchestrator:
             requires_character_sheet=bool(plan.get("requires_character_sheet")),
             character_sheet_prompt=plan.get("character_sheet_prompt", ""),
             character_bible=bible,
+            canonical_assets=[
+                CanonicalAssetSpec(**asset.model_dump())
+                for asset in self.db.list_canonical_assets(project.id)
+            ],
             scenes=specs,
         )
         return self.db.update_scene_spec(scene_id, spec)
@@ -267,10 +303,60 @@ class Orchestrator:
                 "continuity_reason": "Migrated first visual anchor",
             })
             self.db.update_scene_spec(scenes[0].id, first_spec)
-        bible = self.db.get_character_bible(project_id)
-        plan = bible.get("_generation_plan", {})
-        if plan.get("requires_character_sheet"):
-            self.queue_character_sheet(project_id)
+        assets = self.db.list_canonical_assets(project_id)
+        if assets:
+            return [self.queue_canonical_asset(asset.id) for asset in assets]
+        return [self.queue_keyframes(scene.id) for scene in self.db.list_scenes(project_id)]
+
+    def queue_canonical_asset(self, asset_id: str) -> Job:
+        asset = self.db.get_canonical_asset(asset_id)
+        project = self.db.get_project(asset.project_id)
+        prior = [
+            job for job in self.db.list_jobs(project.id)
+            if job.kind == JobKind.CANONICAL_ASSET
+            and job.payload.get("canonical_asset_id") == asset.id
+        ]
+        active = next(
+            (job for job in reversed(prior) if job.state in {JobState.QUEUED, JobState.RUNNING}),
+            None,
+        )
+        if active:
+            return active
+        payload = {
+            "canonical_asset_id": asset.id,
+            "asset_key": asset.key,
+            "asset_role": asset.role,
+            "asset_label": asset.label,
+            "prompt": asset.prompt,
+            "description": asset.description,
+            "visual_style": project.visual_style,
+            "width": 720,
+            "height": 1280,
+            "template": "flux_t2i_api",
+            "generation_round": len(prior) + 1,
+        }
+        return self.db.create_job(
+            project.id, JobKind.CANONICAL_ASSET,
+            stable_key("canonical_asset", asset.id, payload["generation_round"], payload), payload,
+        )
+
+    def approve_canonical_assets(
+        self, project_id: str, request: ApprovalRequest
+    ) -> list[Job]:
+        project = self.db.get_project(project_id)
+        if project.state != ProjectState.REFERENCES:
+            raise ValueError("project is not awaiting canonical reference approval")
+        assets = self.db.list_canonical_assets(project_id)
+        if not assets:
+            raise ValueError("project has no canonical assets")
+        if request.approved and any(not asset.artifact_id for asset in assets):
+            raise ValueError("all canonical references must be generated before approval")
+        self.db.record_approval(
+            project_id, "canonical_assets", request.approved, request.notes
+        )
+        self.db.approve_canonical_assets(project_id, request.approved)
+        if not request.approved:
+            return [self.queue_canonical_asset(asset.id) for asset in assets]
         return [self.queue_keyframes(scene.id) for scene in self.db.list_scenes(project_id)]
 
     def queue_character_sheet(self, project_id: str) -> Job:
@@ -298,6 +384,9 @@ class Orchestrator:
         project = self.db.get_project(scene.project_id)
         active = self._active(scene_id, JobKind.KEYFRAME)
         if active: return active
+        assets = self.db.list_canonical_assets(scene.project_id)
+        if assets and not all(asset.approved and asset.artifact_id for asset in assets):
+            raise ValueError("approve all canonical references before generating scene keyframes")
         if scene.state != SceneState.KEYFRAMES_QUEUED:
             scene = self.db.transition_scene(scene_id, SceneState.KEYFRAMES_QUEUED)
         prior = [j for j in self.db.list_jobs(scene.project_id) if j.scene_id == scene.id and j.kind == JobKind.KEYFRAME]
@@ -305,7 +394,8 @@ class Orchestrator:
                    "visual_style": project.visual_style,
                    "candidates": 2, "width": 384, "height": 672,
                    "generation_mode": "anchor" if scene.spec.starts_new_continuity else "continuation",
-                   "t2i_template": "flux_t2i_api", "edit_template": "flux_edit_api",
+                   "t2i_template": "flux_t2i_api",
+                   "multiref_template_prefix": "flux_klein_multiref",
                    "generation_round": len(prior) + 1}
         return self.db.create_job(scene.project_id, JobKind.KEYFRAME, stable_key("keyframe", payload), payload, scene.id)
 

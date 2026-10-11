@@ -38,6 +38,22 @@ def approve_keyframes(components, project_id: str) -> None:
         )
 
 
+def approve_storyboard_and_references(components, project_id: str):
+    reference_jobs = components.orchestrator.approve_storyboard(
+        project_id, ApprovalRequest(approved=True)
+    )
+    assert reference_jobs
+    assert all(job.kind == JobKind.CANONICAL_ASSET for job in reference_jobs)
+    components.worker.run_until_idle(max_jobs=20)
+    assets = components.db.list_canonical_assets(project_id)
+    assert assets and all(asset.artifact_id for asset in assets)
+    keyframe_jobs = components.orchestrator.approve_canonical_assets(
+        project_id, ApprovalRequest(approved=True)
+    )
+    assert keyframe_jobs
+    return keyframe_jobs
+
+
 @pytest.mark.parametrize("duration", [10, 20, 30])
 def test_simulated_pipeline_completes_vertical_projects(components, duration: int) -> None:
     project = components.orchestrator.create_project(
@@ -51,9 +67,7 @@ def test_simulated_pipeline_completes_vertical_projects(components, duration: in
     assert 3 <= len(storyboard.scenes) <= 10
     assert sum(scene.duration_seconds for scene in storyboard.scenes) == pytest.approx(duration)
 
-    first = components.orchestrator.approve_storyboard(
-        project.id, ApprovalRequest(approved=True)
-    )
+    first = approve_storyboard_and_references(components, project.id)
     duplicate = components.orchestrator.queue_keyframes(
         components.db.list_scenes(project.id)[0].id
     )
@@ -103,9 +117,7 @@ def test_restart_reconciles_stale_project_milestones(components) -> None:
         ProjectCreate(idea="A connected scene survives a server restart", duration_seconds=10)
     )
     components.orchestrator.plan_project(project.id)
-    components.orchestrator.approve_storyboard(
-        project.id, ApprovalRequest(approved=True)
-    )
+    approve_storyboard_and_references(components, project.id)
     components.db.cancel_project_jobs(project.id)
     for scene in components.db.list_scenes(project.id):
         components.db.transition_scene(scene.id, SceneState.KEYFRAMES_READY)
@@ -123,14 +135,49 @@ def test_restart_reconciles_stale_project_milestones(components) -> None:
         restarted.stop()
 
 
+def test_canonical_reference_gate_survives_restart(components) -> None:
+    project = components.orchestrator.create_project(
+        ProjectCreate(idea="An elderly diner is served by the same waiter", duration_seconds=10)
+    )
+    components.orchestrator.plan_project(project.id)
+    reference_jobs = components.orchestrator.approve_storyboard(
+        project.id, ApprovalRequest(approved=True)
+    )
+    assert all(job.kind == JobKind.CANONICAL_ASSET for job in reference_jobs)
+    with pytest.raises(ValueError, match="must be generated"):
+        components.orchestrator.approve_canonical_assets(
+            project.id, ApprovalRequest(approved=True)
+        )
+
+    components.worker.run_until_idle(max_jobs=20)
+    before = components.db.list_canonical_assets(project.id)
+    assert all(asset.artifact_id and not asset.approved for asset in before)
+    assert components.db.get_project(project.id).state == ProjectState.REFERENCES
+
+    restarted = type(components)(components.settings)
+    restarted.start()
+    try:
+        after = restarted.db.list_canonical_assets(project.id)
+        assert [(asset.key, asset.artifact_id) for asset in after] == [
+            (asset.key, asset.artifact_id) for asset in before
+        ]
+        assert restarted.db.get_project(project.id).state == ProjectState.REFERENCES
+        keyframe_jobs = restarted.orchestrator.approve_canonical_assets(
+            project.id, ApprovalRequest(approved=True)
+        )
+        assert keyframe_jobs
+        assert all(job.kind == JobKind.KEYFRAME for job in keyframe_jobs)
+        assert all(asset.approved for asset in restarted.db.list_canonical_assets(project.id))
+    finally:
+        restarted.stop()
+
+
 def test_scene_video_retry_is_isolated(components) -> None:
     project = components.orchestrator.create_project(
         ProjectCreate(idea="Three connected portrait scenes", duration_seconds=10)
     )
     components.orchestrator.plan_project(project.id)
-    components.orchestrator.approve_storyboard(
-        project.id, ApprovalRequest(approved=True)
-    )
+    approve_storyboard_and_references(components, project.id)
     components.worker.run_until_idle()
     approve_keyframes(components, project.id)
     components.worker.run_until_idle()
@@ -201,9 +248,7 @@ def test_cross_scene_artifact_selection_is_rejected(components) -> None:
         ProjectCreate(idea="Keep scene artifacts isolated", duration_seconds=10)
     )
     components.orchestrator.plan_project(project.id)
-    components.orchestrator.approve_storyboard(
-        project.id, ApprovalRequest(approved=True)
-    )
+    approve_storyboard_and_references(components, project.id)
     components.worker.run_until_idle()
     scenes = components.db.list_scenes(project.id)
     first_artifacts = components.db.list_artifacts(project.id, scenes[0].id)
@@ -245,8 +290,8 @@ def test_connected_scenes_share_exact_frames_and_references(components) -> None:
         scene.continuity_group == storyboard.scenes[0].continuity_group
         for scene in storyboard.scenes
     )
-    components.orchestrator.approve_storyboard(project.id, ApprovalRequest(approved=True))
-    assert components.db.list_jobs(project.id)[0].kind == JobKind.CHARACTER_SHEET
+    approve_storyboard_and_references(components, project.id)
+    assert components.db.list_jobs(project.id)[0].kind == JobKind.CANONICAL_ASSET
     components.worker.run_until_idle()
 
     scenes = components.db.list_scenes(project.id)
@@ -298,9 +343,7 @@ def test_keyframe_regeneration_stops_and_rebuilds_connected_chain(components) ->
         ProjectCreate(idea="A recurring worker crosses one continuous platform", duration_seconds=10)
     )
     components.orchestrator.plan_project(project.id)
-    components.orchestrator.approve_storyboard(
-        project.id, ApprovalRequest(approved=True)
-    )
+    approve_storyboard_and_references(components, project.id)
     components.worker.run_until_idle()
     scenes = components.db.list_scenes(project.id)
     assert all(scene.state == SceneState.KEYFRAMES_READY for scene in scenes)
@@ -360,7 +403,7 @@ def test_keyframe_regeneration_stops_and_rebuilds_connected_chain(components) ->
     assert all(item.path == selected_end.path for item in starts)
 
 
-def test_continuity_break_creates_a_fresh_t2i_anchor(components) -> None:
+def test_continuity_break_creates_a_fresh_multireference_anchor(components) -> None:
     project = components.orchestrator.create_project(
         ProjectCreate(idea="A platform scene followed by a different train interior", duration_seconds=10)
     )
@@ -377,7 +420,7 @@ def test_continuity_break_creates_a_fresh_t2i_anchor(components) -> None:
             }
         )
         components.db.update_scene_spec(scene.id, updated)
-    components.orchestrator.approve_storyboard(project.id, ApprovalRequest(approved=True))
+    approve_storyboard_and_references(components, project.id)
     components.worker.run_until_idle()
     scenes = components.db.list_scenes(project.id)
     prior_end = next(
@@ -388,6 +431,6 @@ def test_continuity_break_creates_a_fresh_t2i_anchor(components) -> None:
         item for item in components.db.list_artifacts(project.id, scenes[2].id)
         if item.metadata.get("candidate") == 1 and item.metadata.get("role") == "start"
     )
-    assert reset_start.metadata["generation_method"] == "t2i_anchor"
+    assert reset_start.metadata["generation_method"] == "flux_klein_multireference_anchor"
     assert "shared_from_artifact_id" not in reset_start.metadata
     assert reset_start.path != prior_end.path

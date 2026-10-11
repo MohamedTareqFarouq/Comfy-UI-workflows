@@ -7,6 +7,11 @@ data/
 dist/
 *.egg-info/
 workflows/*_api.json
+!workflows/flux_klein_multireference_4b_api.json
+!workflows/flux_klein_multiref_1_api.json
+!workflows/flux_klein_multiref_2_api.json
+!workflows/flux_klein_multiref_3_api.json
+!workflows/flux_klein_multiref_4_api.json
 !workflows/profiles.json
 wheelhouse/
 .requirements-venv/

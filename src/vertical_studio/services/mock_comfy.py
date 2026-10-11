@@ -28,6 +28,21 @@ class MockComfyClient:
         red, green, blue = colorsys.hsv_to_rgb(hue, 0.45, 0.72)
         return f"0x{int(red * 255):02x}{int(green * 255):02x}{int(blue * 255):02x}"
 
+    def generate_reference_asset(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult:
+        self._maybe_fail(payload)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        width = int(payload.get("width", 384))
+        height = int(payload.get("height", 672))
+        key = str(payload.get("asset_key", "reference"))
+        path = output_dir / f"canonical-{key}.png"
+        run_ffmpeg([
+            "-f", "lavfi", "-i", f"color=c={self._color(key)}:s={width}x{height}:d=0.1",
+            "-frames:v", "1", "-threads", "1", str(path),
+        ])
+        return GenerationResult(
+            files=[path], metadata={"simulated": True, "asset_key": key}
+        )
+
     def generate_character_sheet(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult:
         self._maybe_fail(payload)
         output_dir.mkdir(parents=True, exist_ok=True)

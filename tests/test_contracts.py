@@ -19,6 +19,22 @@ def test_invalid_state_transitions_are_rejected() -> None:
         validate_scene_transition(SceneState.PLANNED, SceneState.VIDEO_READY)
 
 
+def test_multireference_workflows_and_maps_are_valid_json() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow_dir = root / "workflows"
+    mappings = json.loads((workflow_dir / "workflow_maps.json").read_text())
+    for count in range(1, 5):
+        name = f"flux_klein_multiref_{count}_api"
+        graph = json.loads((workflow_dir / f"{name}.json").read_text())
+        reference_keys = [key for key in mappings[name] if key.startswith("reference_")]
+        assert len(reference_keys) == count
+        for key in reference_keys:
+            pointers = mappings[name][key]
+            if isinstance(pointers, dict):
+                pointers = [pointers]
+            assert all(str(pointer["node_id"]) in graph for pointer in pointers)
+
+
 def test_real_adapter_rejects_ui_workflow(tmp_path: Path) -> None:
     (tmp_path / "bad.json").write_text(json.dumps({"nodes": []}))
     client = ComfyClient("http://127.0.0.1:1", tmp_path)

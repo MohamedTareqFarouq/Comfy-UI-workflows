@@ -12,6 +12,8 @@ from typing import Any, Iterator
 from .schemas import (
     Artifact,
     ArtifactKind,
+    CanonicalAsset,
+    CanonicalAssetSpec,
     ExecutionMode,
     Job,
     JobKind,
@@ -116,6 +118,21 @@ CREATE TABLE IF NOT EXISTS artifacts (
   metadata_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS canonical_assets (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  role TEXT NOT NULL,
+  label TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  artifact_id TEXT REFERENCES artifacts(id) ON DELETE SET NULL,
+  approved INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(project_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_canonical_assets_project ON canonical_assets(project_id, role, key);
 CREATE TABLE IF NOT EXISTS qa_reports (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -282,7 +299,7 @@ class Database:
             ).fetchone():
                 raise KeyError(f"project {project_id} not found")
             for table in (
-                "render_manifests", "qa_reports", "approvals", "artifacts",
+                "render_manifests", "qa_reports", "approvals", "canonical_assets", "artifacts",
                 "jobs", "scenes", "character_bibles",
             ):
                 connection.execute(f"DELETE FROM {table} WHERE project_id=?", (project_id,))
@@ -330,15 +347,28 @@ class Database:
             self.add_event(connection, project_id, "project.resumed", {"to": target})
         return self.get_project(project_id)
 
-    def replace_storyboard(self, project_id: str, scenes: list[SceneSpec], bible: dict[str, Any]) -> list[Scene]:
+    def replace_storyboard(
+        self, project_id: str, scenes: list[SceneSpec], bible: dict[str, Any],
+        canonical_assets: list[CanonicalAssetSpec] | None = None,
+    ) -> list[Scene]:
         now = utc_now()
         with self.transaction() as connection:
             connection.execute("DELETE FROM scenes WHERE project_id=?", (project_id,))
+            connection.execute("DELETE FROM canonical_assets WHERE project_id=?", (project_id,))
             connection.execute(
                 "INSERT INTO character_bibles(project_id,data_json,created_at,updated_at) VALUES(?,?,?,?) "
                 "ON CONFLICT(project_id) DO UPDATE SET data_json=excluded.data_json, updated_at=excluded.updated_at",
                 (project_id, json.dumps(bible), now, now),
             )
+            for asset in canonical_assets or []:
+                connection.execute(
+                    "INSERT INTO canonical_assets(id,project_id,key,role,label,prompt,description,created_at,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?)",
+                    (
+                        str(uuid.uuid4()), project_id, asset.key, asset.role, asset.label,
+                        asset.prompt, asset.description, now, now,
+                    ),
+                )
             for position, spec in enumerate(scenes, 1):
                 connection.execute(
                     "INSERT INTO scenes(id,project_id,position,revision,state,spec_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
@@ -716,6 +746,70 @@ class Database:
             data["metadata"] = json.loads(data.pop("metadata_json"))
             result.append(Artifact(**data))
         return result
+
+    @staticmethod
+    def _canonical_asset(row: sqlite3.Row) -> CanonicalAsset:
+        data = dict(row)
+        data["approved"] = bool(data["approved"])
+        return CanonicalAsset(**data)
+
+    def list_canonical_assets(self, project_id: str) -> list[CanonicalAsset]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM canonical_assets WHERE project_id=? "
+                "ORDER BY CASE role WHEN 'character' THEN 0 WHEN 'environment' THEN 1 "
+                "WHEN 'prop' THEN 2 ELSE 3 END, created_at",
+                (project_id,),
+            ).fetchall()
+        return [self._canonical_asset(row) for row in rows]
+
+    def get_canonical_asset(self, asset_id: str) -> CanonicalAsset:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM canonical_assets WHERE id=?", (asset_id,)
+            ).fetchone()
+        if not row:
+            raise KeyError(f"canonical asset {asset_id} not found")
+        return self._canonical_asset(row)
+
+    def attach_canonical_artifact(self, asset_id: str, artifact_id: str) -> CanonicalAsset:
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT project_id FROM canonical_assets WHERE id=?", (asset_id,)
+            ).fetchone()
+            artifact = connection.execute(
+                "SELECT project_id,scene_id,kind FROM artifacts WHERE id=?", (artifact_id,)
+            ).fetchone()
+            if not row or not artifact:
+                raise KeyError("canonical asset or artifact not found")
+            if artifact["project_id"] != row["project_id"] or artifact["scene_id"] is not None or artifact["kind"] != ArtifactKind.IMAGE:
+                raise ValueError("canonical artifact must be a project-level image")
+            connection.execute(
+                "UPDATE canonical_assets SET artifact_id=?, approved=0, updated_at=? WHERE id=?",
+                (artifact_id, utc_now(), asset_id),
+            )
+            self.add_event(
+                connection, row["project_id"], "canonical_asset.generated",
+                {"canonical_asset_id": asset_id, "artifact_id": artifact_id},
+            )
+        return self.get_canonical_asset(asset_id)
+
+    def approve_canonical_assets(self, project_id: str, approved: bool) -> list[CanonicalAsset]:
+        with self.transaction() as connection:
+            rows = connection.execute(
+                "SELECT id,artifact_id FROM canonical_assets WHERE project_id=?", (project_id,)
+            ).fetchall()
+            if approved and any(not row["artifact_id"] for row in rows):
+                raise ValueError("all canonical assets must be generated before approval")
+            connection.execute(
+                "UPDATE canonical_assets SET approved=?, updated_at=? WHERE project_id=?",
+                (int(approved), utc_now(), project_id),
+            )
+            self.add_event(
+                connection, project_id, "canonical_assets.approved" if approved else "canonical_assets.rejected",
+                {"count": len(rows)},
+            )
+        return self.list_canonical_assets(project_id)
 
     def list_qa_reports(self, project_id: str) -> list[dict[str, Any]]:
         with self.connect() as connection:

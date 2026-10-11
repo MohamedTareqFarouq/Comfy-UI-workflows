@@ -1,0 +1,319 @@
+{
+  "1": {
+    "inputs": {
+      "unet_name": "flux-2-klein-4b-fp8.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "FLUX.2 Klein 4B FP8"
+    }
+  },
+  "2": {
+    "inputs": {
+      "clip_name": "qwen_3_4b.safetensors",
+      "type": "flux2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Qwen text encoder"
+    }
+  },
+  "3": {
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "FLUX.2 VAE"
+    }
+  },
+  "4": {
+    "inputs": {
+      "text": "Create a new vertical cinematic shot. Use image 1 for the primary character, image 2 for the second character, image 3 for the environment, and image 4 for the important prop or style. Preserve the referenced identities and environment, but compose one coherent scene rather than a reference sheet or collage.",
+      "clip": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "SCENE PROMPT \u2014 refer to images 1\u20134 explicitly"
+    }
+  },
+  "5": {
+    "inputs": {
+      "conditioning": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut",
+    "_meta": {
+      "title": "Zero negative conditioning"
+    }
+  },
+  "10": {
+    "inputs": {
+      "image": "comfy_logo_blue.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "IMAGE 1 \u2014 PRIMARY CHARACTER"
+    }
+  },
+  "20": {
+    "inputs": {
+      "upscale_method": "nearest-exact",
+      "megapixels": 0.35,
+      "resolution_steps": 1,
+      "image": [
+        "10",
+        0
+      ]
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "_meta": {
+      "title": "Scale reference 1"
+    }
+  },
+  "30": {
+    "inputs": {
+      "pixels": [
+        "20",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "Encode reference 1"
+    }
+  },
+  "11": {
+    "inputs": {
+      "image": "comfy_logo_blue.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "IMAGE 2 \u2014 SECOND CHARACTER"
+    }
+  },
+  "21": {
+    "inputs": {
+      "upscale_method": "nearest-exact",
+      "megapixels": 0.35,
+      "resolution_steps": 1,
+      "image": [
+        "11",
+        0
+      ]
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "_meta": {
+      "title": "Scale reference 2"
+    }
+  },
+  "31": {
+    "inputs": {
+      "pixels": [
+        "21",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "Encode reference 2"
+    }
+  },
+  "40": {
+    "inputs": {
+      "conditioning": [
+        "4",
+        0
+      ],
+      "latent": [
+        "30",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "Positive reference 1"
+    }
+  },
+  "50": {
+    "inputs": {
+      "conditioning": [
+        "5",
+        0
+      ],
+      "latent": [
+        "30",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "Negative reference 1"
+    }
+  },
+  "41": {
+    "inputs": {
+      "conditioning": [
+        "40",
+        0
+      ],
+      "latent": [
+        "31",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "Positive reference 2"
+    }
+  },
+  "51": {
+    "inputs": {
+      "conditioning": [
+        "50",
+        0
+      ],
+      "latent": [
+        "31",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "Negative reference 2"
+    }
+  },
+  "60": {
+    "inputs": {
+      "width": 720,
+      "height": 1280,
+      "batch_size": 1
+    },
+    "class_type": "EmptyFlux2LatentImage",
+    "_meta": {
+      "title": "Fixed 9:16 output latent"
+    }
+  },
+  "61": {
+    "inputs": {
+      "noise_seed": 1
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "Candidate seed"
+    }
+  },
+  "62": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "Euler sampler"
+    }
+  },
+  "63": {
+    "inputs": {
+      "steps": 4,
+      "width": 720,
+      "height": 1280
+    },
+    "class_type": "Flux2Scheduler",
+    "_meta": {
+      "title": "FLUX.2 4-step schedule"
+    }
+  },
+  "64": {
+    "inputs": {
+      "cfg": 1,
+      "model": [
+        "1",
+        0
+      ],
+      "positive": [
+        "41",
+        0
+      ],
+      "negative": [
+        "51",
+        0
+      ]
+    },
+    "class_type": "CFGGuider",
+    "_meta": {
+      "title": "FLUX.2 guider"
+    }
+  },
+  "65": {
+    "inputs": {
+      "noise": [
+        "61",
+        0
+      ],
+      "guider": [
+        "64",
+        0
+      ],
+      "sampler": [
+        "62",
+        0
+      ],
+      "sigmas": [
+        "63",
+        0
+      ],
+      "latent_image": [
+        "60",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "Generate independent scene anchor"
+    }
+  },
+  "66": {
+    "inputs": {
+      "samples": [
+        "65",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "Decode"
+    }
+  },
+  "67": {
+    "inputs": {
+      "filename_prefix": "Flux2_Klein_MultiRef",
+      "images": [
+        "66",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save scene anchor"
+    }
+  }
+}

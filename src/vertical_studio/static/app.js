@@ -43,6 +43,7 @@ function when(value){
 }
 
 const jobLabels={
+  canonical_asset:"Generating a canonical reference with Flux",
   character_sheet:"Generating the character sheet with Flux",
   keyframe:"Generating continuity keyframes with Flux",
   video:"Generating scene videos with Wan",
@@ -103,7 +104,7 @@ function projectActivity(detail){
     research_needed:["waiting","Waiting","Research or source material is required"],
     planning:["stopped","Stopped","Planning did not finish; press Plan storyboard to retry"],
     storyboard_review:["waiting","Waiting for you","Review, edit, regenerate, or approve the storyboard"],
-    references:["working","Working","Preparing scene keyframes"],
+    references:["waiting","Reference review","Generate or approve the canonical references before scene keyframes"],
     contact_sheet_review:["waiting","Waiting for you","Approve a keyframe pair for every scene"],
     scenes:["waiting","Waiting for you","Review and approve the generated scene videos"],
     final_review:["waiting","Waiting for you","All scenes are approved; render the final video"],
@@ -117,7 +118,8 @@ function projectActivity(detail){
 
 function operationLabel(path,method){
   if(path.endsWith("/plan"))return "Planning storyboard with Qwen";
-  if(path.includes("storyboard-approval"))return "Starting keyframe generation";
+  if(path.includes("storyboard-approval"))return "Starting canonical reference generation";
+  if(path.includes("canonical-assets-approval"))return "Saving canonical reference review";
   if(path.includes("retry-keyframes"))return "Regenerating keyframes with Flux";
   if(path.includes("keyframe-approval"))return "Saving keyframe approval";
   if(path.includes("retry-video"))return "Regenerating the scene with Wan";
@@ -312,7 +314,7 @@ function renderProjectHistory(jobs,attempts,events,approvals){
 
 function renderDetail(){
   const {
-    project,scenes,artifacts,jobs,attempts=[],
+    project,scenes,artifacts,jobs,attempts=[],canonical_assets=[],
     qa_reports=[],approvals=[],render_manifests=[],events=[]
   }=state.detail;
 
@@ -328,6 +330,12 @@ function renderDetail(){
     actions.push('<button class="primary" data-action="approve-story">Approve storyboard</button>');
     actions.push('<button data-action="regenerate-story">Regenerate storyboard</button>');
     actions.push('<button data-action="edit-project">Edit project</button>');
+  }
+  const referencesReady=canonical_assets.length&&canonical_assets.every(asset=>asset.artifact_id);
+  const referencesApproved=canonical_assets.length&&canonical_assets.every(asset=>asset.approved);
+  if(project.state==="references"&&referencesReady&&!referencesApproved){
+    actions.push('<button class="primary" data-action="approve-references">Approve references</button>');
+    actions.push('<button data-action="regenerate-references">Regenerate references</button>');
   }
   if(project.state==="final_review"||(
       allScenesApproved&&!["rendering","complete"].includes(project.state))){
@@ -412,7 +420,7 @@ function renderDetail(){
           <span class="badge ${scene.state==="approved"?"ok":""}">${scene.state.replaceAll("_"," ")}</span>
         </div>
         <div class="continuity-meta">
-          <span>${scene.spec.starts_new_continuity?"T2I anchor":"Flux Edit continuation"}</span>
+          <span>${scene.spec.starts_new_continuity?"Multi-reference anchor":"Exact prior-frame continuation"}</span>
           <span>Group: ${esc(scene.spec.continuity_group)}</span>
           <span>${esc(scene.spec.transition_from_previous.replaceAll("_"," "))}</span>
         </div>
@@ -425,11 +433,26 @@ function renderDetail(){
     `;
   }).join("");
 
+  const canonicalHtml=canonical_assets.length?`
+    <section class="canonical-panel">
+      <div class="section-title"><div><span class="eyebrow">CANONICAL REFERENCES</span><h2>Identity and environment anchors</h2></div>
+      <span>${canonical_assets.filter(asset=>asset.approved).length}/${canonical_assets.length} approved</span></div>
+      <div class="canonical-grid">${canonical_assets.map(asset=>{
+        const artifact=artifacts.find(item=>item.id===asset.artifact_id);
+        return `<article class="canonical-card">
+          ${artifact?`<img src="/api/artifacts/${artifact.id}/content" alt="${esc(asset.label)}">`:`<div class="reference-placeholder">Generating…</div>`}
+          <div><span class="badge">${esc(asset.role)}</span><h3>${esc(asset.label)}</h3>
+          <p>${esc(asset.description||asset.prompt)}</p><small>${esc(asset.key)}</small></div>
+        </article>`;
+      }).join("")}</div>
+    </section>
+  `:"";
+
   const characterSheet=[...artifacts].reverse().find(
     artifact=>artifact.metadata.role==="character_sheet"
   );
   const characterPlan=state.detail.character_bible?._generation_plan||{};
-  const characterHtml=characterPlan.requires_character_sheet?`
+  const characterHtml=canonical_assets.length?"":characterPlan.requires_character_sheet?`
     <section class="character-plan">
       <div><span class="eyebrow">IDENTITY REFERENCE</span><h3>Character sheet required</h3>
       <p>${esc(characterPlan.character_sheet_prompt)}</p></div>
@@ -445,6 +468,7 @@ function renderDetail(){
     </div>
     <div id="activity-panel" class="activity-panel" role="status" aria-live="polite"></div>
     <div class="toolbar">${actions.join("")}</div>
+    ${canonicalHtml}
     ${characterHtml}
     <div class="notice">${project.execution_mode==="real"
       ?"Real mode: Qwen and ComfyUI models are loaded one at a time to protect GPU memory."
@@ -542,6 +566,8 @@ async function approveKeyframes(button){
 async function act(name){
   if(name==="plan")return post(`/api/projects/${state.current}/plan`,{});
   if(name==="approve-story")return post(`/api/projects/${state.current}/storyboard-approval`,{approved:true,notes:""});
+  if(name==="approve-references")return post(`/api/projects/${state.current}/canonical-assets-approval`,{approved:true,notes:""});
+  if(name==="regenerate-references")return post(`/api/projects/${state.current}/canonical-assets-approval`,{approved:false,notes:"Regenerate all canonical references"});
   if(name==="regenerate-story"){
     const feedback=prompt("What should change in the regenerated storyboard?","");
     if(feedback===null)return;

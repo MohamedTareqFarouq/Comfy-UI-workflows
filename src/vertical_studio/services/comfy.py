@@ -26,6 +26,7 @@ class GenerationResult:
 
 
 class Generator(Protocol):
+    def generate_reference_asset(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult: ...
     def generate_character_sheet(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult: ...
     def generate_keyframes(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult: ...
     def generate_video(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult: ...
@@ -284,6 +285,54 @@ class ComfyClient:
             template, {**payload, "patches": self._mapped_patches(mapping, values)}, output_dir
         )
 
+    def _generate_multiref_image(
+        self, output_dir: Path, payload: dict[str, Any], *, prompt: str,
+        seed: int, references: list[dict[str, Any]], output_prefix: str,
+    ) -> GenerationResult:
+        if not 1 <= len(references) <= 4:
+            raise GenerationError(
+                "reference_count_invalid", "Klein multi-reference requires 1-4 images"
+            )
+        prefix = payload.get("multiref_template_prefix", "flux_klein_multiref")
+        template = f"{prefix}_{len(references)}_api"
+        required = {"prompt", "seed", "width", "height", "output_prefix"}
+        required.update(f"reference_{index}" for index in range(1, len(references) + 1))
+        mapping = self._load_mapping(template, required)
+        values: dict[str, Any] = {
+            "prompt": prompt,
+            "seed": seed,
+            "width": int(payload["width"]),
+            "height": int(payload["height"]),
+            "output_prefix": output_prefix,
+        }
+        audit_references: list[dict[str, Any]] = []
+        for index, reference in enumerate(references, 1):
+            path = Path(reference["path"])
+            values[f"reference_{index}"] = self._upload_image(path)
+            audit_references.append({
+                key: reference.get(key)
+                for key in ("asset_id", "artifact_id", "key", "role", "label", "path")
+            })
+        result = self._run(
+            template, {**payload, "patches": self._mapped_patches(mapping, values)}, output_dir
+        )
+        return GenerationResult(
+            files=result.files,
+            metadata={**result.metadata, "prompt": prompt, "references": audit_references},
+        )
+
+    @staticmethod
+    def _reference_directive(references: list[dict[str, Any]]) -> str:
+        assignments = []
+        for index, reference in enumerate(references, 1):
+            label = (
+                reference.get("label") or reference.get("key")
+                or reference.get("role") or "reference"
+            )
+            role = reference.get("role", "reference")
+            assignments.append(f"image {index} is {label} ({role})")
+        return "Reference assignments: " + "; ".join(assignments) + ". "
+
     @staticmethod
     def _move_first(result: GenerationResult, target: Path) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -320,6 +369,33 @@ class ComfyClient:
             return f"{base}, photorealistic, live action, photographic skin, documentary footage"
         return base
 
+    def generate_reference_asset(
+        self, output_dir: Path, payload: dict[str, Any]
+    ) -> GenerationResult:
+        role = str(payload.get("asset_role", "reference"))
+        suffix = {
+            "character": (
+                "One person only, clean three-quarter identity view, neutral pose, "
+                "plain background, no collage or reference-sheet layout."
+            ),
+            "environment": "Environment only, no people, stable architecture, palette and lighting.",
+            "prop": "One isolated prop only, no people or hands, clean readable silhouette.",
+            "style": "A clean style exemplar with a coherent palette, materials and lighting language.",
+        }.get(role, "One clean reusable visual reference.")
+        prompt = f"{self._style_directive(payload)}{payload['prompt']}. {suffix}"
+        result = self._generate_t2i_image(
+            output_dir / "run", payload, prompt=prompt, seed=int(payload["seed"]),
+            output_prefix=(
+                f"{payload.get('project_id', 'project')}-{payload.get('asset_key', role)}"
+            ),
+        )
+        target = self._move_first(
+            result, output_dir / f"canonical-{payload.get('asset_key', role)}"
+        )
+        return GenerationResult(
+            files=[target], metadata={"run": result.metadata, "prompt": prompt}
+        )
+
     def generate_character_sheet(
         self, output_dir: Path, payload: dict[str, Any]
     ) -> GenerationResult:
@@ -350,30 +426,60 @@ class ComfyClient:
         negative_parts = list(spec.get("negative_constraints", []))
         negative_parts.append(self._style_negative(style))
         common = {**payload, "negative_prompt": ", ".join(filter(None, negative_parts))}
-        sheet = Path(payload["character_sheet_path"]) if payload.get("character_sheet_path") else None
-        source_frames = {int(item["candidate"]): item for item in payload.get("source_frames", [])}
+        canonical = list(payload.get("canonical_references", []))[:4]
+        legacy_sheet = (
+            Path(payload["character_sheet_path"])
+            if payload.get("character_sheet_path") else None
+        )
+        source_frames = {
+            int(item["candidate"]): item for item in payload.get("source_frames", [])
+        }
+        character_count = spec.get("character_count")
+        count_rule = (
+            f"Exactly {character_count} people appear in the image. "
+            if character_count is not None else ""
+        )
+        state_rule = " ".join(filter(None, [
+            spec.get("opening_state", ""),
+            (
+                f"Object ownership: {spec.get('object_owner')}."
+                if spec.get("object_owner") else ""
+            ),
+        ]))
         files: list[Path] = []
         runs: list[dict[str, Any]] = []
         for candidate in range(1, candidates + 1):
             if mode == "anchor":
+                reference_rule = self._reference_directive(canonical) if canonical else ""
                 start_prompt = (
-                    f"{style_directive}{spec['narrative_purpose']}. {spec['start_composition']}. "
-                    f"Vertical 9:16. {spec.get('safe_area', '')}"
+                    f"{style_directive}{count_rule}{reference_rule}"
+                    "Create one coherent vertical scene, not a collage or reference sheet. "
+                    f"{spec['narrative_purpose']}. Opening composition: {spec['start_composition']}. "
+                    f"{state_rule} Preserve every referenced character identity, age, gender, "
+                    "face, hair and wardrobe; preserve the referenced environment architecture "
+                    "and lighting. No duplicate or hybrid characters. "
+                    f"{spec.get('safe_area', '')}"
                 )
-                start_result = self._generate_t2i_image(
-                    output_dir / f"candidate-{candidate}-start-run", common,
-                    prompt=start_prompt, seed=base_seed + candidate * 10,
-                    output_prefix=f"{payload['scene_id']}-c{candidate}-start",
-                )
+                if canonical:
+                    start_result = self._generate_multiref_image(
+                        output_dir / f"candidate-{candidate}-start-run", common,
+                        prompt=start_prompt, seed=base_seed + candidate * 10,
+                        references=canonical,
+                        output_prefix=f"{payload['scene_id']}-c{candidate}-start",
+                    )
+                else:
+                    start_result = self._generate_t2i_image(
+                        output_dir / f"candidate-{candidate}-start-run", common,
+                        prompt=start_prompt, seed=base_seed + candidate * 10,
+                        output_prefix=f"{payload['scene_id']}-c{candidate}-start",
+                    )
                 start_path = self._move_first(
                     start_result, output_dir / f"candidate-{candidate}-start"
                 )
                 files.append(start_path)
                 runs.append({
-                    "candidate": candidate, "role": "start",
-                    "prompt": start_prompt,
-                    "negative_prompt": common["negative_prompt"],
-                    **start_result.metadata,
+                    "candidate": candidate, "role": "start", "prompt": start_prompt,
+                    "negative_prompt": common["negative_prompt"], **start_result.metadata,
                 })
             else:
                 if candidate not in source_frames:
@@ -382,31 +488,52 @@ class ComfyClient:
                         f"candidate {candidate} is missing its previous frame",
                     )
                 start_path = Path(source_frames[candidate]["path"])
-            edit_prompt = (
-                f"{style_directive}Edit the source into the next keyframe without changing its "
-                f"rendering style. {spec['narrative_purpose']}. "
-                f"Target composition: {spec['end_composition']}. Motion progression: {spec['motion']}. "
-                "Use the source image for immediate continuity and the character sheet for identity "
-                "when supplied. Preserve face, "
-                f"wardrobe, background and vertical framing. {spec.get('safe_area', '')}"
+
+            continuity_reference = {
+                "key": "opening_frame", "role": "continuity",
+                "label": "the exact opening frame", "path": str(start_path),
+            }
+            end_references = [continuity_reference, *canonical[:3]]
+            closing_state = spec.get("closing_state") or spec["end_composition"]
+            end_prompt = (
+                f"{style_directive}{count_rule}{self._reference_directive(end_references)}"
+                "Create the closing keyframe of the same shot. Image 1 controls immediate "
+                f"composition and continuity. {spec['narrative_purpose']}. "
+                f"Closing composition: {spec['end_composition']}. Closing state: {closing_state}. "
+                f"Motion progression: {spec['motion']}. Preserve identity, gender, age, wardrobe, "
+                "environment and object ownership. No duplicate or hybrid characters, no collage, "
+                "and no additional people."
             )
-            end_result = self._generate_edit_image(
-                output_dir / f"candidate-{candidate}-end-run", common,
-                prompt=edit_prompt, seed=base_seed + candidate * 10 + 1,
-                source_path=start_path, character_sheet_path=sheet,
-                output_prefix=f"{payload['scene_id']}-c{candidate}-end",
+            if canonical:
+                end_result = self._generate_multiref_image(
+                    output_dir / f"candidate-{candidate}-end-run", common,
+                    prompt=end_prompt, seed=base_seed + candidate * 10 + 1,
+                    references=end_references,
+                    output_prefix=f"{payload['scene_id']}-c{candidate}-end",
+                )
+            else:
+                end_result = self._generate_edit_image(
+                    output_dir / f"candidate-{candidate}-end-run", common,
+                    prompt=end_prompt, seed=base_seed + candidate * 10 + 1,
+                    source_path=start_path, character_sheet_path=legacy_sheet,
+                    output_prefix=f"{payload['scene_id']}-c{candidate}-end",
+                )
+            end_path = self._move_first(
+                end_result, output_dir / f"candidate-{candidate}-end"
             )
-            end_path = self._move_first(end_result, output_dir / f"candidate-{candidate}-end")
             files.append(end_path)
             runs.append({
-                "candidate": candidate, "role": "end",
-                "prompt": edit_prompt,
+                "candidate": candidate, "role": "end", "prompt": end_prompt,
                 "negative_prompt": common["negative_prompt"],
-                "source_image": str(start_path),
-                "character_sheet": str(sheet) if sheet else None,
-                **end_result.metadata,
+                "source_image": str(start_path), **end_result.metadata,
             })
-        return GenerationResult(files=files, metadata={"runs": runs, "generation_mode": mode})
+        return GenerationResult(
+            files=files,
+            metadata={
+                "runs": runs, "generation_mode": mode,
+                "canonical_reference_count": len(canonical),
+            },
+        )
 
     def generate_video(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult:
         template = payload.get("template", "wan14b_lightx2v_flf2v_api")
