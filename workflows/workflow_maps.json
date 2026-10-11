@@ -1,0 +1,85 @@
+{
+  "flux_t2i_api": {
+    "prompt": {
+      "node_id": "4",
+      "input": "text"
+    },
+    "negative_prompt": [],
+    "seed": {
+      "node_id": "6",
+      "input": "seed"
+    },
+    "width": {
+      "node_id": "5",
+      "input": "width"
+    },
+    "height": {
+      "node_id": "5",
+      "input": "height"
+    },
+    "output_prefix": {
+      "node_id": "9",
+      "input": "filename_prefix"
+    }
+  },
+  "wan14b_lightx2v_flf2v_api": {
+    "prompt": {
+      "node_id": "6",
+      "input": "text"
+    },
+    "negative_prompt": {
+      "node_id": "7",
+      "input": "text"
+    },
+    "seed": {
+      "node_id": "57",
+      "input": "noise_seed"
+    },
+    "width": {
+      "node_id": "67",
+      "input": "width"
+    },
+    "height": {
+      "node_id": "67",
+      "input": "height"
+    },
+    "frames": {
+      "node_id": "67",
+      "input": "length"
+    },
+    "start_image": {
+      "node_id": "68",
+      "input": "image"
+    },
+    "end_image": {
+      "node_id": "62",
+      "input": "image"
+    },
+    "output_prefix": {
+      "node_id": "61",
+      "input": "filename_prefix"
+    }
+  },
+  "flux_edit_api": {
+    "prompt": {
+      "node_id": "92:109",
+      "input": "text"
+    },
+    "seed": {
+      "node_id": "92:106",
+      "input": "noise_seed"
+    },
+    "source_image": {
+      "node_id": "76",
+      "input": "image"
+    },
+    "character_sheet": {
+      "node_id": "81",
+      "input": "image"
+    },
+    "output_prefix": {
+      "node_id": "94",
+      "input": "filename_prefix"
+    }
+  }
+}
