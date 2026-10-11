@@ -121,6 +121,8 @@ class SceneSpec(BaseModel):
     reference_keys: list[str] = Field(default_factory=list)
     characters_present: list[str] = Field(default_factory=list)
     environment_key: str | None = None
+    opening_environment_key: str | None = None
+    closing_environment_key: str | None = None
     important_props: list[str] = Field(default_factory=list)
     character_count: int | None = Field(default=None, ge=0, le=8)
     opening_state: str = Field(default="", max_length=1200)
@@ -170,13 +172,67 @@ class Storyboard(BaseModel):
         if len(asset_keys) != len(set(asset_keys)):
             raise ValueError("canonical asset keys must be unique")
         if asset_keys:
-            known = set(asset_keys)
+            assets_by_key = {asset.key: asset for asset in self.canonical_assets}
+            known = set(assets_by_key)
+            previous_closing_environment: str | None = None
+            previous_group: str | None = None
             for scene in self.scenes:
-                unknown = set(scene.reference_keys) - known
+                opening_environment = (
+                    scene.opening_environment_key or scene.environment_key
+                )
+                closing_environment = (
+                    scene.closing_environment_key or opening_environment
+                )
+                declared = set(scene.reference_keys)
+                declared.update(scene.characters_present)
+                declared.update(scene.important_props)
+                declared.update(
+                    key for key in (opening_environment, closing_environment) if key
+                )
+                unknown = declared - known
                 if unknown:
                     raise ValueError(
                         f"scene references unknown canonical assets: {chr(44).join(sorted(unknown))}"
                     )
+                for key in scene.characters_present:
+                    if assets_by_key[key].role != "character":
+                        raise ValueError(f"scene character {key} must reference a character asset")
+                for key in scene.important_props:
+                    if assets_by_key[key].role != "prop":
+                        raise ValueError(f"scene prop {key} must reference a prop asset")
+                for key in (opening_environment, closing_environment):
+                    if key and assets_by_key[key].role != "environment":
+                        raise ValueError(f"scene environment {key} must reference an environment asset")
+                if any(asset.role == "environment" for asset in self.canonical_assets):
+                    if not opening_environment or not closing_environment:
+                        raise ValueError(
+                            "every scene must define opening and closing environment locks"
+                        )
+                if (
+                    previous_group == scene.continuity_group
+                    and not scene.starts_new_continuity
+                    and previous_closing_environment
+                    and opening_environment != previous_closing_environment
+                ):
+                    raise ValueError(
+                        "a connected scene opening environment must match the previous closing environment"
+                    )
+                opening_required = set(scene.characters_present) | set(scene.important_props)
+                if opening_environment:
+                    opening_required.add(opening_environment)
+                if len(opening_required) > 4:
+                    raise ValueError(
+                        "opening keyframe exceeds the four-reference model limit; split the scene"
+                    )
+                closing_required = set(scene.characters_present) | set(scene.important_props)
+                if closing_environment != opening_environment and closing_environment:
+                    closing_required.add(closing_environment)
+                if len(closing_required) > 3:
+                    raise ValueError(
+                        "closing keyframe exceeds three canonical references plus the opening frame; split the scene"
+                    )
+                previous_closing_environment = closing_environment
+                previous_group = scene.continuity_group
         return self
 
 

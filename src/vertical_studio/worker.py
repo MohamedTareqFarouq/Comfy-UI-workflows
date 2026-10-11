@@ -1,6 +1,7 @@
 from __future__ import annotations
 import random, socket, threading
 from pathlib import Path
+from typing import Any
 from .config import Settings
 from .db import Database
 from .platform import PlatformAdapter
@@ -132,29 +133,75 @@ class Worker:
         scene = self.db.get_scene(job.scene_id)
         generation_payload = {**job.payload, "seed": seed}
         registered = self.db.list_canonical_assets(job.project_id)
-        requested = set(scene.spec.reference_keys)
-        selected = [
-            asset for asset in registered
+        available = {
+            asset.key: asset for asset in registered
             if asset.approved and asset.artifact_id
-            and (not requested or asset.key in requested)
+        }
+        opening_environment = (
+            scene.spec.opening_environment_key or scene.spec.environment_key
+        )
+        closing_environment = (
+            scene.spec.closing_environment_key or opening_environment
+        )
+        character_keys = list(scene.spec.characters_present)
+        prop_keys = list(scene.spec.important_props)
+        explicit_keys = [
+            *character_keys,
+            *prop_keys,
+            *[key for key in (opening_environment, closing_environment) if key],
         ]
-        if registered and not selected:
+        other_keys = [
+            key for key in scene.spec.reference_keys if key not in explicit_keys
+        ]
+
+        def unique(keys: list[str]) -> list[str]:
+            return list(dict.fromkeys(key for key in keys if key))
+
+        if explicit_keys:
+            opening_keys = unique([
+                *character_keys, opening_environment, *prop_keys, *other_keys,
+            ])
+            closing_keys = unique(
+                ([closing_environment, *character_keys] if closing_environment != opening_environment
+                 else [*character_keys, closing_environment])
+                + [*prop_keys, *other_keys]
+            )
+        else:
+            fallback = list(scene.spec.reference_keys) or list(available)
+            opening_keys = unique(fallback)
+            closing_keys = unique(fallback)
+        required_keys = set(opening_keys) | set(closing_keys)
+        missing = required_keys - set(available)
+        if registered and (not required_keys or missing):
+            detail = ", ".join(sorted(missing)) or "no references selected"
             raise GenerationError(
                 "canonical_references_missing",
-                "scene has no approved canonical references",
+                f"scene is missing approved canonical references: {detail}",
             )
-        generation_payload["canonical_references"] = [
-            {
-                "asset_id": asset.id,
-                "artifact_id": asset.artifact_id,
-                "key": asset.key,
-                "role": asset.role,
-                "label": asset.label,
-                "description": asset.description,
-                "path": self.db.get_artifact(asset.artifact_id).path,
-            }
-            for asset in selected[:4]
-        ]
+
+        def references(keys: list[str], limit: int) -> list[dict[str, Any]]:
+            result = []
+            for key in keys[:limit]:
+                asset = available[key]
+                result.append({
+                    "asset_id": asset.id,
+                    "artifact_id": asset.artifact_id,
+                    "key": asset.key,
+                    "role": asset.role,
+                    "label": asset.label,
+                    "description": asset.description,
+                    "path": self.db.get_artifact(asset.artifact_id).path,
+                })
+            return result
+
+        opening_references = references(opening_keys, 4)
+        closing_references = references(closing_keys, 3)
+        generation_payload["opening_canonical_references"] = opening_references
+        generation_payload["closing_canonical_references"] = closing_references
+        generation_payload["canonical_references"] = list({
+            reference["key"]: reference
+            for reference in [*opening_references, *closing_references]
+        }.values())
         if not scene.spec.starts_new_continuity:
             scenes = self.db.list_scenes(job.project_id)
             index = next(i for i, item in enumerate(scenes) if item.id == scene.id)
@@ -226,8 +273,14 @@ class Worker:
                      "continuity_group": scene.spec.continuity_group,
                      "canonical_references": [
                          {key: ref.get(key) for key in ("asset_id", "artifact_id", "key", "role", "label")}
-                         for ref in generation_payload.get("canonical_references", [])
-                     ]},
+                         for ref in (
+                             generation_payload.get("opening_canonical_references", [])
+                             if role == "start"
+                             else generation_payload.get("closing_canonical_references", [])
+                         )
+                     ],
+                     "opening_environment_key": opening_environment,
+                     "closing_environment_key": closing_environment},
                     job.scene_id, attempt,
                 )
             self.db.finish_attempt(attempt, "succeeded")

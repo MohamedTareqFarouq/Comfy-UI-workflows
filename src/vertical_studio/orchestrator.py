@@ -149,11 +149,21 @@ class Orchestrator:
                             "end_composition, motion, continuity_group, starts_new_continuity, "
                             "continuity_reason, and transition_from_previous; never substitute scene, "
                             "duration, description, or beat. Define reusable canonical_assets for every recurring "
-                            "character, environment and important prop. Each asset needs a stable lowercase key, "
-                            "role, label, clean single-subject generation prompt and description. Every scene must "
-                            "list only the canonical asset keys it needs in reference_keys, plus characters_present, "
-                            "environment_key, important_props, character_count, opening_state, closing_state, "
-                            "object_owner and handoff_to_next_scene. For every scene, describe both its opening keyframe in "
+                            "character, environment and important prop. Create exactly one character asset per physical "
+                            "character and one environment asset per visually distinct location or room, such as a kitchen, "
+                            "dining room, doorway or corridor; never combine a cast or multiple rooms into one asset. Each "
+                            "asset needs a stable lowercase key, role, label, clean single-subject generation prompt and "
+                            "description. Every scene must list only canonical asset keys in reference_keys, "
+                            "characters_present and important_props. Set environment_key and opening_environment_key to the "
+                            "location visible in the opening frame, and closing_environment_key to the location visible in "
+                            "the closing frame. Use the same lock when the background does not change. For a room transition, "
+                            "use different opening and closing locks and make the compositions explicitly match those rooms. "
+                            "A connected scene's opening environment must equal the previous scene's closing environment. "
+                            "Never allow a kitchen reference in a dining-room-only endpoint. Because the closing endpoint has "
+                            "one opening-frame slot plus only three canonical-reference slots, split any location transition "
+                            "that would require more than two characters plus the new environment. Also provide "
+                            "character_count, opening_state, closing_state, object_owner and handoff_to_next_scene. For every "
+                            "scene, describe both its opening keyframe in "
                             "start_composition and its closing keyframe in end_composition, plus "
                             "the motion connecting them. Apply revision feedback. Return JSON only."
                         ),
@@ -188,6 +198,8 @@ class Orchestrator:
             reference_keys=["protagonist", "primary_environment"],
             characters_present=["protagonist"],
             environment_key="primary_environment",
+            opening_environment_key="primary_environment",
+            closing_environment_key="primary_environment",
             character_count=1,
             opening_state=f"The protagonist begins story beat {n}",
             closing_state=f"The protagonist completes story beat {n}",

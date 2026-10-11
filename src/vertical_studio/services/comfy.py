@@ -427,6 +427,12 @@ class ComfyClient:
         negative_parts.append(self._style_negative(style))
         common = {**payload, "negative_prompt": ", ".join(filter(None, negative_parts))}
         canonical = list(payload.get("canonical_references", []))[:4]
+        opening_canonical = list(
+            payload.get("opening_canonical_references", canonical)
+        )[:4]
+        closing_canonical = list(
+            payload.get("closing_canonical_references", canonical)
+        )[:3]
         legacy_sheet = (
             Path(payload["character_sheet_path"])
             if payload.get("character_sheet_path") else None
@@ -450,21 +456,26 @@ class ComfyClient:
         runs: list[dict[str, Any]] = []
         for candidate in range(1, candidates + 1):
             if mode == "anchor":
-                reference_rule = self._reference_directive(canonical) if canonical else ""
+                reference_rule = (
+                    self._reference_directive(opening_canonical)
+                    if opening_canonical else ""
+                )
                 start_prompt = (
                     f"{style_directive}{count_rule}{reference_rule}"
                     "Create one coherent vertical scene, not a collage or reference sheet. "
                     f"{spec['narrative_purpose']}. Opening composition: {spec['start_composition']}. "
                     f"{state_rule} Preserve every referenced character identity, age, gender, "
                     "face, hair and wardrobe; preserve the referenced environment architecture "
-                    "and lighting. No duplicate or hybrid characters. "
+                    "and lighting. Use only the opening environment lock; do not import architecture "
+                    "or furniture from a different room. No duplicate or hybrid characters. "
+                    f"Opening environment lock: {spec.get('opening_environment_key') or spec.get('environment_key') or 'unspecified'}. "
                     f"{spec.get('safe_area', '')}"
                 )
-                if canonical:
+                if opening_canonical:
                     start_result = self._generate_multiref_image(
                         output_dir / f"candidate-{candidate}-start-run", common,
                         prompt=start_prompt, seed=base_seed + candidate * 10,
-                        references=canonical,
+                        references=opening_canonical,
                         output_prefix=f"{payload['scene_id']}-c{candidate}-start",
                     )
                 else:
@@ -493,7 +504,7 @@ class ComfyClient:
                 "key": "opening_frame", "role": "continuity",
                 "label": "the exact opening frame", "path": str(start_path),
             }
-            end_references = [continuity_reference, *canonical[:3]]
+            end_references = [continuity_reference, *closing_canonical]
             closing_state = spec.get("closing_state") or spec["end_composition"]
             end_prompt = (
                 f"{style_directive}{count_rule}{self._reference_directive(end_references)}"
@@ -501,10 +512,12 @@ class ComfyClient:
                 f"composition and continuity. {spec['narrative_purpose']}. "
                 f"Closing composition: {spec['end_composition']}. Closing state: {closing_state}. "
                 f"Motion progression: {spec['motion']}. Preserve identity, gender, age, wardrobe, "
-                "environment and object ownership. No duplicate or hybrid characters, no collage, "
-                "and no additional people."
+                "environment and object ownership. The closing environment lock controls the final "
+                "background; do not retain furniture or architecture from the opening room when the "
+                f"lock changes. Closing environment lock: {spec.get('closing_environment_key') or spec.get('opening_environment_key') or spec.get('environment_key') or 'unspecified'}. "
+                "No duplicate or hybrid characters, no collage, and no additional people."
             )
-            if canonical:
+            if opening_canonical or closing_canonical:
                 end_result = self._generate_multiref_image(
                     output_dir / f"candidate-{candidate}-end-run", common,
                     prompt=end_prompt, seed=base_seed + candidate * 10 + 1,
@@ -532,6 +545,10 @@ class ComfyClient:
             metadata={
                 "runs": runs, "generation_mode": mode,
                 "canonical_reference_count": len(canonical),
+                "opening_reference_count": len(opening_canonical),
+                "closing_reference_count": len(closing_canonical),
+                "opening_environment_key": spec.get("opening_environment_key") or spec.get("environment_key"),
+                "closing_environment_key": spec.get("closing_environment_key") or spec.get("opening_environment_key") or spec.get("environment_key"),
             },
         )
 

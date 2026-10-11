@@ -423,6 +423,7 @@ function renderDetail(){
           <span>${scene.spec.starts_new_continuity?"Multi-reference anchor":"Exact prior-frame continuation"}</span>
           <span>Group: ${esc(scene.spec.continuity_group)}</span>
           <span>${esc(scene.spec.transition_from_previous.replaceAll("_"," "))}</span>
+          <span>Environment: ${esc(scene.spec.opening_environment_key||scene.spec.environment_key||"unlocked")} → ${esc(scene.spec.closing_environment_key||scene.spec.opening_environment_key||scene.spec.environment_key||"unlocked")}</span>
         </div>
         <p class="spec">${esc(scene.spec.narrative_purpose)}</p>
         <small class="continuity-reason">${esc(scene.spec.continuity_reason)}</small>

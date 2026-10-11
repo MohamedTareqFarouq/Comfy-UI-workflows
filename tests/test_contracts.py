@@ -35,6 +35,111 @@ def test_multireference_workflows_and_maps_are_valid_json() -> None:
             assert all(str(pointer["node_id"]) in graph for pointer in pointers)
 
 
+def test_storyboard_enforces_endpoint_environment_continuity() -> None:
+    assets = [
+        {"key": "leo", "role": "character", "label": "Leo", "prompt": "Leo alone"},
+        {"key": "kitchen", "role": "environment", "label": "Kitchen", "prompt": "Empty kitchen"},
+        {"key": "dining_room", "role": "environment", "label": "Dining room", "prompt": "Empty dining room"},
+    ]
+
+    def scene(title: str, opening: str, closing: str, first: bool = False) -> dict:
+        return {
+            "title": title,
+            "narrative_purpose": title,
+            "duration_seconds": 3,
+            "start_composition": f"Leo in {opening}",
+            "end_composition": f"Leo in {closing}",
+            "motion": "One clear action",
+            "continuity_group": "restaurant",
+            "starts_new_continuity": first,
+            "transition_from_previous": "new_sequence" if first else "continuous",
+            "reference_keys": ["leo", opening, closing],
+            "characters_present": ["leo"],
+            "environment_key": opening,
+            "opening_environment_key": opening,
+            "closing_environment_key": closing,
+        }
+
+    valid = Storyboard(
+        summary="Kitchen to dining room",
+        requires_character_sheet=False,
+        character_sheet_prompt="",
+        character_bible={},
+        canonical_assets=assets,
+        scenes=[
+            scene("Prepare", "kitchen", "kitchen", True),
+            scene("Cross doorway", "kitchen", "dining_room"),
+            scene("Serve", "dining_room", "dining_room"),
+        ],
+    )
+    assert valid.scenes[1].closing_environment_key == "dining_room"
+
+    broken = [item.model_dump() for item in valid.scenes]
+    broken[2]["opening_environment_key"] = "kitchen"
+    broken[2]["environment_key"] = "kitchen"
+    with pytest.raises(ValueError, match="opening environment"):
+        Storyboard(
+            summary=valid.summary,
+            requires_character_sheet=False,
+            character_sheet_prompt="",
+            character_bible={},
+            canonical_assets=assets,
+            scenes=broken,
+        )
+
+
+def test_keyframes_use_different_environment_references_per_endpoint(
+    monkeypatch, tmp_path: Path
+) -> None:
+    client = ComfyClient("http://127.0.0.1:1", tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_multiref(
+        output: Path, _payload: dict, *, prompt: str, seed: int,
+        references: list[dict], output_prefix: str,
+    ) -> GenerationResult:
+        calls.append([reference["key"] for reference in references])
+        output.mkdir(parents=True, exist_ok=True)
+        path = output / f"{output_prefix}.png"
+        path.write_bytes(f"{prompt}:{seed}".encode())
+        return GenerationResult(files=[path], metadata={})
+
+    monkeypatch.setattr(client, "_generate_multiref_image", fake_multiref)
+    client.generate_keyframes(
+        tmp_path / "output",
+        {
+            "scene_id": "doorway",
+            "spec": {
+                "narrative_purpose": "Leo crosses from kitchen to dining room",
+                "start_composition": "Leo in the kitchen doorway",
+                "end_composition": "Leo enters the dining room",
+                "motion": "Leo takes one step through the doorway",
+                "negative_constraints": [],
+                "safe_area": "center subject",
+                "characters_present": ["leo"],
+                "opening_environment_key": "kitchen",
+                "closing_environment_key": "dining_room",
+            },
+            "generation_mode": "anchor",
+            "candidates": 1,
+            "seed": 42,
+            "width": 384,
+            "height": 672,
+            "visual_style": "stylized 3D animation",
+            "opening_canonical_references": [
+                {"key": "leo", "role": "character", "label": "Leo", "path": "leo.png"},
+                {"key": "kitchen", "role": "environment", "label": "Kitchen", "path": "kitchen.png"},
+            ],
+            "closing_canonical_references": [
+                {"key": "leo", "role": "character", "label": "Leo", "path": "leo.png"},
+                {"key": "dining_room", "role": "environment", "label": "Dining room", "path": "dining.png"},
+            ],
+        },
+    )
+    assert calls[0] == ["leo", "kitchen"]
+    assert calls[1] == ["opening_frame", "leo", "dining_room"]
+
+
 def test_real_adapter_rejects_ui_workflow(tmp_path: Path) -> None:
     (tmp_path / "bad.json").write_text(json.dumps({"nodes": []}))
     client = ComfyClient("http://127.0.0.1:1", tmp_path)
