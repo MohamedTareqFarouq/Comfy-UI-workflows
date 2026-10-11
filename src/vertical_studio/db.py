@@ -475,6 +475,59 @@ class Database:
         with self.transaction() as connection:
             connection.execute("UPDATE scenes SET continuity_stale=0, updated_at=? WHERE id=?", (utc_now(), scene_id))
 
+    def invalidate_keyframe_chain(self, scene_id: str) -> tuple[list[Scene], bool]:
+        """Reset a scene and its connected successors before keyframe regeneration.
+
+        Earlier artifacts and attempts remain available as history, but they are no
+        longer selected and queued/running downstream work is cancelled.
+        """
+        scene = self.get_scene(scene_id)
+        scenes = self.list_scenes(scene.project_id)
+        start = next(index for index, item in enumerate(scenes) if item.id == scene_id)
+        affected = [scene]
+        for item in scenes[start + 1:]:
+            if item.spec.starts_new_continuity or item.spec.continuity_group != scene.spec.continuity_group:
+                break
+            affected.append(item)
+        ids = [item.id for item in affected]
+        placeholders = ",".join("?" for _ in ids)
+        now = utc_now()
+        with self.transaction() as connection:
+            running = connection.execute(
+                f"SELECT 1 FROM jobs WHERE scene_id IN ({placeholders}) AND kind IN (?,?) AND state=? LIMIT 1",
+                [*ids, JobKind.KEYFRAME, JobKind.VIDEO, JobState.RUNNING],
+            ).fetchone() is not None
+            rows = connection.execute(
+                f"SELECT id FROM jobs WHERE scene_id IN ({placeholders}) AND kind IN (?,?) AND state IN (?,?)",
+                [*ids, JobKind.KEYFRAME, JobKind.VIDEO, JobState.QUEUED, JobState.RUNNING],
+            ).fetchall()
+            connection.execute(
+                f"UPDATE jobs SET state=?, lease_owner=NULL, lease_expires_at=NULL, updated_at=? "
+                f"WHERE scene_id IN ({placeholders}) AND kind IN (?,?) AND state IN (?,?)",
+                [JobState.CANCELLED, now, *ids, JobKind.KEYFRAME, JobKind.VIDEO,
+                 JobState.QUEUED, JobState.RUNNING],
+            )
+            for index, item in enumerate(affected):
+                target = SceneState.KEYFRAMES_QUEUED if index == 0 else SceneState.PLANNED
+                connection.execute(
+                    "UPDATE scenes SET state=?, continuity_stale=?, "
+                    "selected_start_artifact_id=NULL, selected_end_artifact_id=NULL, "
+                    "selected_video_artifact_id=NULL, updated_at=? WHERE id=?",
+                    (target, int(index > 0), now, item.id),
+                )
+                self.add_event(
+                    connection, scene.project_id,
+                    "scene.keyframes_invalidated" if index else "scene.keyframes_regeneration_started",
+                    {"root_scene_id": scene_id}, item.id,
+                )
+            if rows:
+                self.add_event(
+                    connection, scene.project_id, "scene.jobs_cancelled",
+                    {"job_ids": [row["id"] for row in rows], "root_scene_id": scene_id},
+                    scene_id,
+                )
+        return [self.get_scene(item.id) for item in affected], running
+
     def create_job(
         self,
         project_id: str,

@@ -178,7 +178,7 @@ async function refreshDetail(){
 }
 
 function artifactFor(scene,kind,role,candidate=null){
-  return state.detail.artifacts.find(artifact=>
+  return [...state.detail.artifacts].reverse().find(artifact=>
     artifact.scene_id===scene.id&&
     artifact.kind===kind&&
     (!role||artifact.metadata.role===role)&&
@@ -391,6 +391,9 @@ function renderDetail(){
             Approve candidate ${pair.candidate}
           </button>
         `).join("")}<button data-retry-kf="${scene.id}">Regenerate</button>`;
+    }
+    if(scene.state==="planned"&&scene.continuity_stale){
+      controls='<small>Waiting for the regenerated previous scene to be approved.</small>';
     }
     if(["video_ready","qa_failed"].includes(scene.state)){
       controls=`<button data-approve-video="${scene.id}">Approve video</button><button data-retry-video="${scene.id}">Retry video</button>`;

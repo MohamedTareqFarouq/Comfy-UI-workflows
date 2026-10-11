@@ -160,7 +160,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/scenes/{scene_id}/retry-keyframes")
     def retry_keyframes(scene_id: str):
-        try: return components.orchestrator.queue_keyframes(scene_id)
+        try: return components.orchestrator.regenerate_keyframes(scene_id)
         except Exception as exc: fail(exc)
 
     @app.post("/api/scenes/{scene_id}/retry-video")

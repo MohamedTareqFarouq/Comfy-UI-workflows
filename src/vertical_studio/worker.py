@@ -4,7 +4,7 @@ from pathlib import Path
 from .config import Settings
 from .db import Database
 from .platform import PlatformAdapter
-from .schemas import ArtifactKind, Job, JobKind, ProjectState, SceneState
+from .schemas import ArtifactKind, Job, JobKind, JobState, ProjectState, SceneState
 from .services.comfy import GenerationError, Generator
 from .services.gpu import GpuCoordinator
 from .services.model_gateway import ModelUnavailable
@@ -33,11 +33,15 @@ class Worker:
             }[job.kind](job)
             return self.db.finish_job(job.id)
         except GenerationError as exc:
+            if self.db.get_job(job.id).state == JobState.CANCELLED:
+                return self.db.get_job(job.id)
             if exc.code == "oom": self.generator.free_memory()
             if exc.transient and job.attempts < 2: return self.db.requeue_job(job.id, str(exc))
             self._mark_failed(job, exc.code)
             return self.db.finish_job(job.id, error_code=exc.code, error_message=str(exc))
         except Exception as exc:
+            if self.db.get_job(job.id).state == JobState.CANCELLED:
+                return self.db.get_job(job.id)
             self._mark_failed(job, "internal_error")
             return self.db.finish_job(job.id, error_code="internal_error", error_message=str(exc))
 
@@ -114,21 +118,29 @@ class Worker:
             previous = scenes[index - 1]
             if previous.spec.continuity_group != scene.spec.continuity_group:
                 raise GenerationError("continuity_dependency_missing", "previous scene belongs to another continuity group")
-            previous_ends = self._latest_candidates(
-                self.db.list_artifacts(job.project_id, previous.id), "end"
-            )
             candidates = int(job.payload.get("candidates", 2))
-            if len(previous_ends) < candidates:
-                raise GenerationError(
-                    "continuity_dependency_missing",
-                    "previous end frames are unavailable",
-                    transient=True,
+            if previous.state == SceneState.KEYFRAMES_APPROVED and previous.selected_end_artifact_id:
+                approved_end = self.db.get_artifact(previous.selected_end_artifact_id)
+                generation_payload["source_frames"] = [
+                    {"candidate": candidate, "artifact_id": approved_end.id,
+                     "path": approved_end.path, "sha256": approved_end.sha256}
+                    for candidate in range(1, candidates + 1)
+                ]
+            else:
+                previous_ends = self._latest_candidates(
+                    self.db.list_artifacts(job.project_id, previous.id), "end"
                 )
-            generation_payload["source_frames"] = [
-                {"candidate": candidate, "artifact_id": previous_ends[candidate].id,
-                 "path": previous_ends[candidate].path, "sha256": previous_ends[candidate].sha256}
-                for candidate in range(1, candidates + 1)
-            ]
+                if len(previous_ends) < candidates:
+                    raise GenerationError(
+                        "continuity_dependency_missing",
+                        "previous end frames are unavailable",
+                        transient=True,
+                    )
+                generation_payload["source_frames"] = [
+                    {"candidate": candidate, "artifact_id": previous_ends[candidate].id,
+                     "path": previous_ends[candidate].path, "sha256": previous_ends[candidate].sha256}
+                    for candidate in range(1, candidates + 1)
+                ]
         attempt = self.db.create_attempt(
             job, "flux-continuity-chain-v1", seed, generation_payload
         )
@@ -137,6 +149,9 @@ class Worker:
                 result = self.generator.generate_keyframes(
                     self._dir(job, attempt), generation_payload
                 )
+            if self.db.get_job(job.id).state == JobState.CANCELLED:
+                self.db.finish_attempt(attempt, "cancelled")
+                return
             for reference in generation_payload.get("source_frames", []):
                 self.db.add_artifact(
                     job.project_id, ArtifactKind.IMAGE, Path(reference["path"]),

@@ -268,6 +268,73 @@ def test_connected_scenes_share_exact_frames_and_references(components) -> None:
     assert components.db.get_artifact(approved.selected_start_artifact_id).path == first_end.path
 
 
+def test_keyframe_regeneration_stops_and_rebuilds_connected_chain(components) -> None:
+    project = components.orchestrator.create_project(
+        ProjectCreate(idea="A recurring worker crosses one continuous platform", duration_seconds=10)
+    )
+    components.orchestrator.plan_project(project.id)
+    components.orchestrator.approve_storyboard(
+        project.id, ApprovalRequest(approved=True)
+    )
+    components.worker.run_until_idle()
+    scenes = components.db.list_scenes(project.id)
+    assert all(scene.state == SceneState.KEYFRAMES_READY for scene in scenes)
+
+    retry = components.orchestrator.regenerate_keyframes(scenes[0].id)
+    reset = components.db.list_scenes(project.id)
+    assert retry.kind == JobKind.KEYFRAME
+    assert reset[0].state == SceneState.KEYFRAMES_QUEUED
+    assert all(scene.state == SceneState.PLANNED for scene in reset[1:])
+    assert all(scene.continuity_stale for scene in reset[1:])
+
+    components.worker.run_until_idle()
+    stopped = components.db.list_scenes(project.id)
+    assert stopped[0].state == SceneState.KEYFRAMES_READY
+    assert all(scene.state == SceneState.PLANNED for scene in stopped[1:])
+
+    retry_attempt = next(
+        attempt for attempt in components.db.list_attempts(project.id)
+        if attempt["job_id"] == retry.id
+    )
+    regenerated = [
+        artifact for artifact in components.db.list_artifacts(project.id, stopped[0].id)
+        if artifact.attempt_id == retry_attempt["id"]
+    ]
+    start = next(
+        artifact for artifact in regenerated
+        if artifact.metadata.get("candidate") == 1 and artifact.metadata.get("role") == "start"
+    )
+    selected_end = next(
+        artifact for artifact in regenerated
+        if artifact.metadata.get("candidate") == 1 and artifact.metadata.get("role") == "end"
+    )
+    components.orchestrator.approve_keyframes(
+        stopped[0].id,
+        ArtifactSelection(start_artifact_id=start.id, end_artifact_id=selected_end.id),
+        ApprovalRequest(approved=True),
+    )
+    assert components.db.get_scene(stopped[1].id).state == SceneState.KEYFRAMES_QUEUED
+
+    components.worker.run_until_idle()
+    next_scene = components.db.get_scene(stopped[1].id)
+    assert next_scene.state == SceneState.KEYFRAMES_READY
+    latest_job = [
+        job for job in components.db.list_jobs(project.id)
+        if job.scene_id == next_scene.id and job.kind == JobKind.KEYFRAME
+    ][-1]
+    next_attempt = next(
+        attempt for attempt in components.db.list_attempts(project.id)
+        if attempt["job_id"] == latest_job.id
+    )
+    starts = [
+        artifact for artifact in components.db.list_artifacts(project.id, next_scene.id)
+        if artifact.attempt_id == next_attempt["id"] and artifact.metadata.get("role") == "start"
+    ]
+    assert len(starts) == 2
+    assert all(item.metadata["shared_from_artifact_id"] == selected_end.id for item in starts)
+    assert all(item.path == selected_end.path for item in starts)
+
+
 def test_continuity_break_creates_a_fresh_t2i_anchor(components) -> None:
     project = components.orchestrator.create_project(
         ProjectCreate(idea="A platform scene followed by a different train interior", duration_seconds=10)

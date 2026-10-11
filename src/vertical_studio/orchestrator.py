@@ -255,6 +255,18 @@ class Orchestrator:
                    "generation_round": len(prior) + 1}
         return self.db.create_job(scene.project_id, JobKind.KEYFRAME, stable_key("keyframe", payload), payload, scene.id)
 
+    def regenerate_keyframes(self, scene_id: str) -> Job:
+        scene = self.db.get_scene(scene_id)
+        if scene.state not in {
+            SceneState.KEYFRAMES_READY, SceneState.KEYFRAMES_APPROVED,
+            SceneState.VIDEO_READY, SceneState.QA_FAILED, SceneState.APPROVED,
+        }:
+            raise ValueError("scene keyframes are not ready to regenerate")
+        _affected, interrupted = self.db.invalidate_keyframe_chain(scene_id)
+        if interrupted:
+            self.gpu.generator.interrupt()
+        return self.queue_keyframes(scene_id)
+
     def approve_keyframes(self, scene_id: str, selection: ArtifactSelection, request: ApprovalRequest) -> Scene:
         scene = self.db.get_scene(scene_id)
         if scene.state != SceneState.KEYFRAMES_READY: raise ValueError("keyframes are not ready")
@@ -279,6 +291,16 @@ class Orchestrator:
         self.db.select_artifacts(scene.id, start_id=selection.start_artifact_id, end_id=selection.end_artifact_id)
         scene = self.db.transition_scene(scene.id, SceneState.KEYFRAMES_APPROVED)
         scenes = self.db.list_scenes(scene.project_id)
+        index = next(i for i, item in enumerate(scenes) if item.id == scene.id)
+        if index + 1 < len(scenes):
+            following = scenes[index + 1]
+            if (
+                not following.spec.starts_new_continuity
+                and following.spec.continuity_group == scene.spec.continuity_group
+                and following.state == SceneState.PLANNED
+            ):
+                self.queue_keyframes(following.id)
+                scenes = self.db.list_scenes(scene.project_id)
         if all(s.state == SceneState.KEYFRAMES_APPROVED for s in scenes):
             # This is the stage boundary: keep Flux resident through all image
             # generation/review, then free it once before any Wan job is queued.
