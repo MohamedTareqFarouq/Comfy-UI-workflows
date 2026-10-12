@@ -193,6 +193,29 @@ function artifactFor(scene,kind,role,candidate=null){
   );
 }
 
+function renderJobLifecycle(job){
+  if(!job)return "";
+  const labels=["Queuing","Queued","Running","Success"];
+  const indexes={queued:1,running:2,succeeded:3};
+  const failed=["failed","cancelled"].includes(job.state);
+  const current=failed?3:(indexes[job.state]??0);
+  const steps=labels.map((label,index)=>{
+    const visibleLabel=failed&&index===3
+      ?(job.state==="cancelled"?"Cancelled":"Failed")
+      :label;
+    const stateClass=failed&&index===3
+      ?"failed"
+      :index<current||job.state==="succeeded"
+        ?"complete"
+        :index===current
+          ?"current"
+          :"pending";
+    return '<span class="job-step '+stateClass+'"><i></i>'+visibleLabel+'</span>';
+  }).join("");
+  return '<div class="job-lifecycle" aria-label="Generation job '+esc(job.state)+'">'
+    +steps+'<small>Job '+esc(job.id.slice(0,8))+'</small></div>';
+}
+
 function attemptMedia(attempt,artifacts){
   const media=artifacts.filter(artifact=>artifact.attempt_id===attempt.id);
   if(!media.length)return "";
@@ -354,6 +377,10 @@ function renderDetail(){
 
   const scenesHtml=scenes.map(scene=>{
     const sceneArtifacts=artifacts.filter(artifact=>artifact.scene_id===scene.id);
+    const latestGenerationJob=[...jobs].reverse().find(
+      job=>job.scene_id===scene.id&&["keyframe","video"].includes(job.kind)
+    );
+    const jobLifecycle=renderJobLifecycle(latestGenerationJob);
     const selectedStart=sceneArtifacts.find(a=>a.id===scene.selected_start_artifact_id)||artifactFor(scene,"image","start",1);
     const selectedEnd=sceneArtifacts.find(a=>a.id===scene.selected_end_artifact_id)||artifactFor(scene,"image","end",1);
     const video=sceneArtifacts.find(a=>a.id===scene.selected_video_artifact_id)||[...sceneArtifacts].reverse().find(a=>a.kind==="video");
@@ -428,7 +455,7 @@ function renderDetail(){
         </div>
         <p class="spec">${esc(scene.spec.narrative_purpose)}</p>
         <small class="continuity-reason">${esc(scene.spec.continuity_reason)}</small>
-        ${media}${qaHtml}
+        ${media}${jobLifecycle}${qaHtml}
         <div class="card-actions">${controls}</div>
         ${renderSceneHistory(scene,attempts,artifacts)}
       </article>
@@ -488,9 +515,9 @@ function renderDetail(){
 function bindActions(){
   document.querySelectorAll("[data-action]").forEach(button=>button.onclick=()=>act(button.dataset.action));
   document.querySelectorAll("[data-kf]").forEach(button=>button.onclick=()=>approveKeyframes(button));
-  document.querySelectorAll("[data-retry-kf]").forEach(button=>button.onclick=()=>openGuidedRetry(button.dataset.retryKf,"keyframe"));
+  document.querySelectorAll("[data-retry-kf]").forEach(button=>button.onclick=()=>openGuidedRetry(button.dataset.retryKf,"keyframe",button));
   document.querySelectorAll("[data-approve-video]").forEach(button=>button.onclick=()=>post(`/api/scenes/${button.dataset.approveVideo}/approval`,{approved:true,notes:""}));
-  document.querySelectorAll("[data-retry-video]").forEach(button=>button.onclick=()=>openGuidedRetry(button.dataset.retryVideo,"video"));
+  document.querySelectorAll("[data-retry-video]").forEach(button=>button.onclick=()=>openGuidedRetry(button.dataset.retryVideo,"video",button));
   document.querySelectorAll("[data-edit-scene]").forEach(button=>button.onclick=()=>editScene(button.dataset.editScene));
   document.querySelectorAll("[data-delete-scene]").forEach(button=>button.onclick=()=>deleteScene(button.dataset.deleteScene));
   const history=q("#history-panel");
@@ -555,64 +582,103 @@ async function deleteScene(sceneId){
   }catch(_error){}
 }
 
-async function openGuidedRetry(sceneId,stage){
+function setRetryStatus(message,tone="working"){
+  const status=q("#retry-status");
+  status.textContent=message;
+  status.dataset.tone=tone;
+  status.hidden=!message;
+}
+
+async function openGuidedRetry(sceneId,stage,trigger=null){
+  if(trigger?.disabled)return;
   const dialog=q("#retry-dialog");
   const form=q("#retry-form");
+  const reviseButton=q("#revise-retry-prompts");
+  const submitButton=form.querySelector('[type="submit"]');
+  if(trigger)trigger.disabled=true;
+  form.reset();
+  form.elements.scene_id.value=sceneId;
+  form.elements.stage.value=stage;
+  form.elements.revision_rationale.value="";
+  form.dataset.revised="false";
+  form.dataset.busy="true";
+  reviseButton.disabled=true;
+  submitButton.disabled=true;
+  q("#retry-start-field").hidden=true;
+  q("#retry-end-field").hidden=stage!=="keyframe";
+  q("#retry-video-field").hidden=stage!=="video";
+  q("#retry-title").textContent=stage==="keyframe"?"Revise Flux keyframe prompts":"Revise Wan video prompt";
+  q("#retry-description").textContent=stage==="keyframe"
+    ?"Describe what is wrong with this scene's keyframes. Qwen will revise only the Flux prompts."
+    :"Describe what is wrong with this clip. Qwen will revise only the Wan prompt.";
+  q("#retry-rationale").hidden=true;
+  setRetryStatus("Loading the current prompts...");
+  if(!dialog.open)dialog.showModal();
   try{
-    const bundle=await api(`/api/scenes/${sceneId}/retry-prompts/${stage}`);
-    form.reset();
-    form.elements.scene_id.value=sceneId;
-    form.elements.stage.value=stage;
+    const bundle=await api("/api/scenes/"+sceneId+"/retry-prompts/"+stage);
     form.elements.start_prompt.value=bundle.start_prompt||"";
     form.elements.end_prompt.value=bundle.end_prompt||"";
     form.elements.video_prompt.value=bundle.video_prompt||"";
     form.elements.negative_prompt.value=bundle.negative_prompt||"";
     q("#retry-start-field").hidden=stage!=="keyframe"||!bundle.start_prompt;
-    q("#retry-end-field").hidden=stage!=="keyframe";
-    q("#retry-video-field").hidden=stage!=="video";
-    q("#retry-title").textContent=stage==="keyframe"?"Revise Flux keyframe prompts":"Revise Wan video prompt";
-    q("#retry-description").textContent=stage==="keyframe"
-      ?"Describe what is wrong with this scene’s keyframes. Qwen will revise only the Flux prompts."
-      :"Describe what is wrong with this clip. Qwen will revise only the Wan prompt.";
-    q("#retry-rationale").hidden=true;
-    form.elements.revision_rationale.value="";
-    form.dataset.revised="false";
-    form.querySelector('[type="submit"]').disabled=true;
-    dialog.showModal();
-  }catch(error){toast(error.message)}
+    setRetryStatus("Prompts loaded. Add feedback, then ask Qwen to revise.","ready");
+    reviseButton.disabled=false;
+  }catch(error){
+    setRetryStatus(error.message,"error");
+    toast(error.message);
+  }finally{
+    delete form.dataset.busy;
+    if(trigger)trigger.disabled=false;
+  }
 }
 
 async function reviseGuidedRetry(){
   const form=q("#retry-form");
-  if(!form.reportValidity())return;
+  if(form.dataset.busy==="true"||!form.reportValidity())return;
   const stage=form.elements.stage.value;
   const button=q("#revise-retry-prompts");
+  const submitButton=form.querySelector('[type="submit"]');
   const original=button.textContent;
-  button.disabled=true;button.textContent="Qwen is revising…";
+  form.dataset.busy="true";
+  form.dataset.revised="false";
+  button.disabled=true;
+  submitButton.disabled=true;
+  button.textContent="Qwen is revising...";
+  setRetryStatus("Qwen is revising the selected prompts. Please wait - this can take a minute.");
   try{
-    const proposal=await api(`/api/scenes/${form.elements.scene_id.value}/retry-prompts/${stage}/revise`,{
-      method:"POST",
-      body:JSON.stringify({
-        stage,
-        feedback:form.elements.feedback.value,
-        start_prompt:stage==="keyframe"&&form.elements.start_prompt.value?form.elements.start_prompt.value:null,
-        end_prompt:stage==="keyframe"?form.elements.end_prompt.value:null,
-        video_prompt:stage==="video"?form.elements.video_prompt.value:null,
-        negative_prompt:form.elements.negative_prompt.value
-      })
-    });
+    const proposal=await api(
+      "/api/scenes/"+form.elements.scene_id.value+"/retry-prompts/"+stage+"/revise",
+      {
+        method:"POST",
+        body:JSON.stringify({
+          stage,
+          feedback:form.elements.feedback.value,
+          start_prompt:stage==="keyframe"&&form.elements.start_prompt.value?form.elements.start_prompt.value:null,
+          end_prompt:stage==="keyframe"?form.elements.end_prompt.value:null,
+          video_prompt:stage==="video"?form.elements.video_prompt.value:null,
+          negative_prompt:form.elements.negative_prompt.value
+        })
+      }
+    );
     form.elements.start_prompt.value=proposal.start_prompt||"";
     form.elements.end_prompt.value=proposal.end_prompt||"";
     form.elements.video_prompt.value=proposal.video_prompt||"";
     form.elements.negative_prompt.value=proposal.negative_prompt||"";
     const rationale=q("#retry-rationale");
-    rationale.textContent=proposal.rationale||"Qwen’s revised prompts are ready for review.";
+    rationale.textContent=proposal.rationale||"Qwen's revised prompts are ready for review.";
     rationale.hidden=false;
     form.elements.revision_rationale.value=proposal.rationale||"";
     form.dataset.revised="true";
-    form.querySelector('[type="submit"]').disabled=false;
-  }catch(error){toast(error.message)}
-  finally{button.disabled=false;button.textContent=original}
+    submitButton.disabled=false;
+    setRetryStatus("Revision ready. Review the prompts, then accept to queue regeneration.","ready");
+  }catch(error){
+    setRetryStatus(error.message,"error");
+    toast(error.message);
+  }finally{
+    delete form.dataset.busy;
+    button.disabled=false;
+    button.textContent=original;
+  }
 }
 
 async function approveKeyframes(button){
@@ -685,9 +751,12 @@ document.querySelector("[data-retry-close]").onclick=()=>q("#retry-dialog").clos
 q("#retry-form").onsubmit=async event=>{
   event.preventDefault();
   const form=event.currentTarget;
-  if(form.dataset.revised!=="true")return;
+  if(form.dataset.revised!=="true"||form.dataset.busy==="true")return;
   const sceneId=form.elements.scene_id.value;
   const stage=form.elements.stage.value;
+  const submitButton=form.querySelector('[type="submit"]');
+  const reviseButton=q("#revise-retry-prompts");
+  const original=submitButton.textContent;
   const body={
     changed_negative_prompt:form.elements.negative_prompt.value,
     feedback:form.elements.feedback.value,
@@ -700,11 +769,42 @@ q("#retry-form").onsubmit=async event=>{
   }else{
     body.changed_prompt=form.elements.video_prompt.value;
   }
+  form.dataset.busy="true";
+  submitButton.disabled=true;
+  reviseButton.disabled=true;
+  submitButton.textContent="Queuing regeneration...";
+  setRetryStatus(
+    stage==="keyframe"
+      ?"Queuing the Flux keyframe retry..."
+      :"Queuing the Wan video retry..."
+  );
   try{
-    await mutate(`/api/scenes/${sceneId}/${stage==="keyframe"?"retry-keyframes":"retry-video"}`,"POST",body);
+    const endpoint=stage==="keyframe"?"retry-keyframes":"retry-video";
+    const job=await mutate("/api/scenes/"+sceneId+"/"+endpoint,"POST",body);
+    if(!job?.id)throw new Error("The server did not confirm a regeneration job.");
+    setRetryStatus("Retry job "+job.id.slice(0,8)+" queued successfully.","ready");
+    if(state.detail){
+      const existing=state.detail.jobs.findIndex(item=>item.id===job.id);
+      if(existing>=0)state.detail.jobs[existing]=job;
+      else state.detail.jobs.push(job);
+      const scene=state.detail.scenes.find(item=>item.id===sceneId);
+      if(scene)scene.state=stage==="keyframe"?"keyframes_queued":"video_queued";
+      state.detailSignature=null;
+      renderDetail();
+    }
+    toast((stage==="keyframe"?"Keyframe":"Video")+" regeneration queued");
     q("#retry-dialog").close();
     await refreshDetail();
-  }catch(error){toast(error.message)}
+  }catch(error){
+    setRetryStatus(error.message,"error");
+  }finally{
+    delete form.dataset.busy;
+    if(q("#retry-dialog").open){
+      submitButton.disabled=form.dataset.revised!=="true";
+      reviseButton.disabled=false;
+      submitButton.textContent=original;
+    }
+  }
 };
 
 q("#new-project").onclick=()=>q("#create-dialog").showModal();
