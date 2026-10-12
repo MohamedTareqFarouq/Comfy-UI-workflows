@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from vertical_studio.schemas import ProjectState, SceneState, Storyboard
+from vertical_studio.orchestrator import Orchestrator
+from vertical_studio.schemas import ProjectState, SceneState, Storyboard, VideoRetryPromptProposal
 from vertical_studio.services.comfy import ComfyClient, GenerationError, GenerationResult
 from vertical_studio.services.model_gateway import ModelGateway
 from vertical_studio.services.mock_comfy import MockComfyClient
@@ -302,8 +303,34 @@ def test_structured_generation_recovers_from_two_malformed_json_responses(
     assert len(requests) == 3
     assert requests[2]["temperature"] == 0
     final_correction = requests[2]["messages"][-1]["content"]
-    assert "fewest scenes permitted" in final_correction
+    assert "do not repeat list items or phrases" in final_correction
+    assert "finish the complete JSON object" in final_correction
     assert all(message["role"] != "assistant" for message in requests[2]["messages"])
+
+
+def test_video_retry_schema_excludes_irrelevant_keyframe_fields() -> None:
+    properties = VideoRetryPromptProposal.model_json_schema()["properties"]
+    assert set(properties) == {
+        "stage", "video_prompt", "negative_prompt", "rationale"
+    }
+    assert properties["negative_prompt"]["maxLength"] == 1800
+
+
+def test_retry_negative_prompt_is_deduplicated_bounded_and_style_safe() -> None:
+    repeated = ", ".join(
+        ["3D animation", "motion blur", "MOTION BLUR"]
+        + [f"artifact {index}" for index in range(80)]
+    )
+    cleaned = Orchestrator._sanitize_negative_prompt(
+        repeated,
+        "Premium stylized 3D animation with warm lighting",
+    )
+    terms = cleaned.split(", ")
+
+    assert "3D animation" not in terms
+    assert terms.count("motion blur") == 1
+    assert len(terms) == 60
+    assert terms[-1] == "artifact 58"
 
 
 def test_flux_edit_receives_previous_frame_character_sheet_and_style(monkeypatch, tmp_path: Path) -> None:

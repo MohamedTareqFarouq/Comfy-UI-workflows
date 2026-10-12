@@ -317,6 +317,21 @@ class ArtifactSelection(BaseModel):
     video_artifact_id: str | None = None
 
 
+class VideoRetryPromptProposal(BaseModel):
+    stage: Literal["video"]
+    video_prompt: str = Field(min_length=1, max_length=4000)
+    negative_prompt: str = Field(default="", max_length=1800)
+    rationale: str = Field(default="", max_length=600)
+
+
+class KeyframeRetryPromptProposal(BaseModel):
+    stage: Literal["keyframe"]
+    start_prompt: str | None = Field(default=None, max_length=4000)
+    end_prompt: str = Field(min_length=1, max_length=4000)
+    negative_prompt: str = Field(default="", max_length=1800)
+    rationale: str = Field(default="", max_length=600)
+
+
 class RetryPromptBundle(BaseModel):
     stage: Literal["keyframe", "video"]
     start_prompt: str | None = Field(default=None, max_length=8000)

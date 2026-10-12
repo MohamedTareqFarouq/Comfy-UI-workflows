@@ -175,8 +175,8 @@ class ModelGateway:
                 last_error = exc
                 if attempt < 2 and last_content:
                     economy = (
-                        " On this final attempt, use the fewest scenes permitted by the schema "
-                        "and keep descriptions concise so the complete object fits in context."
+                        " On this final attempt, keep every string concise, do not repeat list "
+                        "items or phrases, and finish the complete JSON object."
                         if attempt == 1 else ""
                     )
                     payload["messages"] = [

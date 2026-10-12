@@ -5,8 +5,9 @@ from typing import Any
 from .config import Settings
 from .db import Database
 from .schemas import (ApprovalRequest, ArtifactKind, ArtifactSelection, CanonicalAssetSpec, ExecutionMode, Job, JobKind, JobState,
- PlanRequest, Project, ProjectCreate, ProjectState, ProjectUpdate, RenderRequest, RetryPromptBundle,
- RetryPromptRevisionRequest, RetryRequest, Scene, SceneSpec, SceneState, Storyboard)
+ KeyframeRetryPromptProposal, PlanRequest, Project, ProjectCreate, ProjectState, ProjectUpdate,
+ RenderRequest, RetryPromptBundle, RetryPromptRevisionRequest, RetryRequest, Scene, SceneSpec,
+ SceneState, Storyboard, VideoRetryPromptProposal)
 from .services.gpu import GpuCoordinator
 from .services.model_gateway import ModelGateway, ModelUnavailable
 from .services.research import BraveResearchProvider
@@ -497,29 +498,119 @@ class Orchestrator:
             report["report"] for report in self.db.list_qa_reports(scene.project_id)
             if report["scene_id"] == scene.id
         ]
+        latest_reasons = (reports[-1].get("reasons", [])[:8] if reports else [])
+        spec = scene.spec
+        scene_context = {
+            "narrative_purpose": spec.narrative_purpose,
+            "start_composition": spec.start_composition,
+            "end_composition": spec.end_composition,
+            "motion": spec.motion,
+            "camera": spec.camera,
+            "characters_present": spec.characters_present,
+            "environment_keys": [
+                key for key in (
+                    spec.opening_environment_key,
+                    spec.closing_environment_key,
+                    spec.environment_key,
+                ) if key
+            ],
+            "important_props": spec.important_props,
+            "opening_state": spec.opening_state,
+            "closing_state": spec.closing_state,
+            "object_owner": spec.object_owner,
+        }
+        project = self.db.get_project(scene.project_id)
+        if stage == "video":
+            output_type = VideoRetryPromptProposal
+            system = (
+                "Revise only the supplied Wan video prompt and negative prompt using the user's "
+                "feedback. The stage is already selected; do not discuss or choose another stage. "
+                "Preserve the story beat, named characters, identity, wardrobe, object ownership, "
+                "environment locks, required visual style, start composition and end composition. "
+                "Do not introduce new characters, actions, props, environments or facts. Prefer the "
+                "smallest concrete edit that fixes the reported problem. Keep video_prompt under "
+                "220 words. Keep negative_prompt under 60 unique comma-separated terms. Never repeat "
+                "a term. Never put a required style, character, prop, environment or requested action "
+                "in negative_prompt. Return stage, video_prompt, negative_prompt and a rationale under "
+                "60 words. Return JSON only."
+            )
+            prompt_context = {
+                "required_visual_style": project.visual_style,
+                "scene": scene_context,
+                "current_video_prompt": current.video_prompt,
+                "current_negative_prompt": self._sanitize_negative_prompt(
+                    current.negative_prompt, current.video_prompt or project.visual_style
+                ),
+                "user_feedback": request.feedback,
+                "relevant_review_reasons": latest_reasons,
+            }
+        else:
+            output_type = KeyframeRetryPromptProposal
+            system = (
+                "Revise only the supplied Flux keyframe prompts and negative prompt using the user's "
+                "feedback. The stage is already selected; do not discuss or choose another stage. "
+                "Preserve the story beat, named characters, identity, wardrobe, object ownership, "
+                "environment locks and required visual style. Do not introduce new characters, props, "
+                "environments or facts. Keep each prompt under 220 words. Keep negative_prompt under "
+                "60 unique comma-separated terms. Never repeat a term or negate required content. "
+                "If current_start_prompt is null, return start_prompt as null. Otherwise change it only "
+                "when the feedback requires it. Return stage, start_prompt, end_prompt, negative_prompt "
+                "and a rationale under 60 words. Return JSON only."
+            )
+            positive = " ".join(filter(None, (current.start_prompt, current.end_prompt)))
+            prompt_context = {
+                "required_visual_style": project.visual_style,
+                "scene": scene_context,
+                "current_start_prompt": current.start_prompt,
+                "current_end_prompt": current.end_prompt,
+                "current_negative_prompt": self._sanitize_negative_prompt(
+                    current.negative_prompt, positive or project.visual_style
+                ),
+                "user_feedback": request.feedback,
+                "relevant_review_reasons": latest_reasons,
+            }
         with self.gpu.qwen():
             proposal = self.model.generate_structured(
-                RetryPromptBundle,
-                system=(
-                    f"Revise only the {stage} generation prompts for one existing scene. "
-                    "The user has already selected the generation stage; never choose or recommend "
-                    "another stage. Preserve the story beat, approved identities, wardrobe, object "
-                    "ownership, environment locks and visual style. Make concrete prompt changes that "
-                    "address the feedback. Strengthen the negative prompt for unwanted outcomes. "
-                    "For keyframes, return the provided start prompt unchanged when it is null and "
-                    "revise the end prompt; revise a non-null start prompt only when feedback requires it. "
-                    f"The stage field must be {stage}. Return JSON only."
-                ),
-                context=json.dumps({
-                    "scene": scene.spec.model_dump(),
-                    "current_prompts": current.model_dump(),
-                    "user_feedback": request.feedback,
-                    "latest_visual_review": reports[-1] if reports else None,
-                }),
+                output_type,
+                system=system,
+                context=json.dumps(prompt_context),
+                max_tokens=1200,
             )
         if proposal.stage != stage:
             raise ValueError("Qwen returned a prompt revision for the wrong stage")
-        return proposal
+        data = proposal.model_dump()
+        positive_text = " ".join(filter(None, (
+            data.get("start_prompt"),
+            data.get("end_prompt"),
+            data.get("video_prompt"),
+            project.visual_style,
+        )))
+        data["negative_prompt"] = self._sanitize_negative_prompt(
+            data.get("negative_prompt", ""), positive_text
+        )
+        if stage == "keyframe" and request.start_prompt is None:
+            data["start_prompt"] = None
+        return RetryPromptBundle(**data)
+
+    @staticmethod
+    def _sanitize_negative_prompt(
+        negative_prompt: str, required_positive_text: str, limit: int = 60
+    ) -> str:
+        required = required_positive_text.casefold()
+        unique: list[str] = []
+        seen: set[str] = set()
+        for raw in negative_prompt.split(","):
+            term = " ".join(raw.split()).strip(" .")
+            key = term.casefold()
+            if not key or key in seen:
+                continue
+            if len(key) >= 3 and key in required:
+                continue
+            seen.add(key)
+            unique.append(term[:120])
+            if len(unique) >= limit:
+                break
+        return ", ".join(unique)
 
     def regenerate_keyframes(
         self, scene_id: str, retry: RetryRequest | None = None
