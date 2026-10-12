@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from vertical_studio.orchestrator import Orchestrator
-from vertical_studio.schemas import ProjectState, SceneState, Storyboard, VideoRetryPromptProposal
+from vertical_studio.schemas import ProjectState, SceneState, Storyboard, VideoRetryPromptProposal, VisualReview
 from vertical_studio.services.comfy import ComfyClient, GenerationError, GenerationResult
 from vertical_studio.services.model_gateway import ModelGateway
 from vertical_studio.services.mock_comfy import MockComfyClient
@@ -167,6 +167,43 @@ def test_qualification_is_diagnostics_only_by_default(components) -> None:
     assert Path(report["report_path"]).exists()
     with pytest.raises(QualificationError, match="confirm"):
         service.run("smoke")
+
+
+def test_image_review_accepts_schema_named_wrapper(monkeypatch, tmp_path: Path) -> None:
+    gateway = ModelGateway(
+        "http://127.0.0.1:8080", "qwen", log_path=tmp_path / "qwen.log"
+    )
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            wrapped = {
+                "VisualReview": {
+                    "advisory_pass": False,
+                    "scores": {"prompt_adherence": 0.4},
+                    "reasons": ["The opening frame does not match the reference."],
+                }
+            }
+            return {"choices": [{"message": {"content": json.dumps(wrapped)}}]}
+
+    monkeypatch.setattr(gateway, "ensure_available", lambda: None)
+    monkeypatch.setattr(
+        "vertical_studio.services.model_gateway.httpx.post",
+        lambda *_args, **_kwargs: Response(),
+    )
+
+    review = gateway.analyze_images(
+        VisualReview,
+        system="Review the frames.",
+        prompt="Check continuity.",
+        image_urls=[],
+    )
+
+    assert review.advisory_pass is False
+    assert review.scores["prompt_adherence"] == 0.4
+    assert review.reasons == ["The opening frame does not match the reference."]
 
 
 def test_structured_retry_shows_qwen_the_exact_schema(monkeypatch, tmp_path: Path) -> None:

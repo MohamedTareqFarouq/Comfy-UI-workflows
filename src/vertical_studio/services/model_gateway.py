@@ -213,12 +213,19 @@ class ModelGateway:
                 lines = lines[:-1]
             value = "\n".join(lines).strip()
         try:
-            return output_type.model_validate_json(value)
+            parsed = json.loads(value)
         except ValueError:
             start, end = value.find("{"), value.rfind("}")
             if start < 0 or end <= start:
                 raise
-            return output_type.model_validate(json.loads(value[start : end + 1]))
+            parsed = json.loads(value[start : end + 1])
+        if isinstance(parsed, dict) and len(parsed) == 1:
+            key, wrapped = next(iter(parsed.items()))
+            schema_title = str(output_type.model_json_schema().get("title", ""))
+            accepted = {output_type.__name__.casefold(), schema_title.casefold()}
+            if key.casefold() in accepted and isinstance(wrapped, dict):
+                parsed = wrapped
+        return output_type.model_validate(parsed)
 
     def _record_invalid_response(
         self, content: str, error: Exception | None
@@ -269,7 +276,7 @@ class ModelGateway:
             )
             response.raise_for_status()
             value = response.json()["choices"][0]["message"]["content"]
-            return output_type.model_validate_json(value)
+            return self._parse_structured(output_type, value)
         except (httpx.HTTPError, KeyError, ValueError) as exc:
             raise ModelUnavailable(str(exc)) from exc
 
