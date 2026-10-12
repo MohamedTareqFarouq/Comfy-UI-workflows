@@ -358,6 +358,22 @@ class RetryPromptRevisionRequest(BaseModel):
     negative_prompt: str = Field(default="", max_length=4000)
 
 
+class CanonicalAssetPromptProposal(BaseModel):
+    prompt: str = Field(min_length=1, max_length=4000)
+    rationale: str = Field(default="", max_length=600)
+
+
+class CanonicalAssetPromptRevisionRequest(BaseModel):
+    feedback: str = Field(min_length=1, max_length=4000)
+    prompt: str = Field(min_length=1, max_length=8000)
+
+
+class CanonicalAssetRetryRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=8000)
+    feedback: str = Field(default="", max_length=4000)
+    revision_rationale: str = Field(default="", max_length=2000)
+
+
 class RetryRequest(BaseModel):
     changed_prompt: str | None = Field(default=None, max_length=8000)
     changed_start_prompt: str | None = Field(default=None, max_length=8000)

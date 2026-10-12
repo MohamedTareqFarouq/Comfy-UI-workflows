@@ -11,9 +11,9 @@ from pydantic import BaseModel
 from .config import Settings, load_settings
 from .db import Database
 from .orchestrator import Orchestrator
-from .schemas import (ApprovalRequest, ArtifactSelection, PlanRequest, ProjectCreate,
-                      ProjectUpdate, RenderRequest, RetryPromptRevisionRequest,
-                      RetryRequest, SceneSpec)
+from .schemas import (ApprovalRequest, ArtifactSelection, CanonicalAssetPromptRevisionRequest,
+                      CanonicalAssetRetryRequest, PlanRequest, ProjectCreate, ProjectUpdate,
+                      RenderRequest, RetryPromptRevisionRequest, RetryRequest, SceneSpec)
 from .services.comfy import ComfyClient
 from .services.gpu import GpuCoordinator
 from .services.mock_comfy import MockComfyClient
@@ -160,6 +160,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def canonical_assets_approval(project_id: str, request: ApprovalRequest):
         try:
             return components.orchestrator.approve_canonical_assets(project_id, request)
+        except Exception as exc:
+            fail(exc)
+
+    @app.get("/api/canonical-assets/{asset_id}/retry-prompt")
+    def canonical_asset_retry_prompt(asset_id: str):
+        try:
+            return components.orchestrator.get_canonical_asset_retry_prompt(asset_id)
+        except Exception as exc:
+            fail(exc)
+
+    @app.post("/api/canonical-assets/{asset_id}/retry-prompt/revise")
+    def revise_canonical_asset_retry_prompt(
+        asset_id: str, request: CanonicalAssetPromptRevisionRequest
+    ):
+        try:
+            return components.orchestrator.revise_canonical_asset_prompt(asset_id, request)
+        except Exception as exc:
+            fail(exc)
+
+    @app.post("/api/canonical-assets/{asset_id}/retry")
+    def retry_canonical_asset(asset_id: str, request: CanonicalAssetRetryRequest):
+        try:
+            return components.orchestrator.retry_canonical_asset(asset_id, request)
         except Exception as exc:
             fail(exc)
 

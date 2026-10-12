@@ -8,6 +8,8 @@ from vertical_studio.schemas import (
     ApprovalRequest,
     ArtifactKind,
     ArtifactSelection,
+    CanonicalAssetPromptRevisionRequest,
+    CanonicalAssetRetryRequest,
     JobKind,
     ProjectCreate,
     ProjectState,
@@ -526,3 +528,106 @@ def test_continuity_break_creates_a_fresh_multireference_anchor(components) -> N
     assert reset_start.metadata["generation_method"] == "flux_klein_multireference_anchor"
     assert "shared_from_artifact_id" not in reset_start.metadata
     assert reset_start.path != prior_end.path
+
+
+
+def test_individual_canonical_asset_retry_is_limited_to_reference_review(components) -> None:
+    project = components.orchestrator.create_project(
+        ProjectCreate(idea="A waiter serves one elderly diner", duration_seconds=10)
+    )
+    components.orchestrator.plan_project(project.id)
+    jobs = components.orchestrator.approve_storyboard(
+        project.id, ApprovalRequest(approved=True)
+    )
+    assert jobs
+    components.worker.run_until_idle(max_jobs=20)
+    asset = components.db.list_canonical_assets(project.id)[0]
+    original_artifact_id = asset.artifact_id
+    bundle = components.orchestrator.get_canonical_asset_retry_prompt(asset.id)
+    proposal = components.orchestrator.revise_canonical_asset_prompt(
+        asset.id,
+        CanonicalAssetPromptRevisionRequest(
+            prompt=bundle["prompt"],
+            feedback="Keep this asset isolated with no unrelated people",
+        ),
+    )
+    retry = components.orchestrator.retry_canonical_asset(
+        asset.id,
+        CanonicalAssetRetryRequest(
+            prompt=proposal.prompt,
+            feedback="Keep this asset isolated with no unrelated people",
+            revision_rationale=proposal.rationale,
+        ),
+    )
+    reset = components.db.get_canonical_asset(asset.id)
+    assert retry.kind == JobKind.CANONICAL_ASSET
+    assert reset.artifact_id is None
+    assert reset.prompt == proposal.prompt
+
+    components.worker.run_until_idle(max_jobs=20)
+    regenerated = components.db.get_canonical_asset(asset.id)
+    assert regenerated.artifact_id
+    assert regenerated.artifact_id != original_artifact_id
+
+    components.orchestrator.approve_canonical_assets(
+        project.id, ApprovalRequest(approved=True)
+    )
+    with pytest.raises(ValueError, match="reference review"):
+        components.orchestrator.retry_canonical_asset(
+            asset.id, CanonicalAssetRetryRequest(prompt=proposal.prompt)
+        )
+
+
+def test_keyframes_can_be_reopened_while_video_is_queued(components) -> None:
+    project = components.orchestrator.create_project(
+        ProjectCreate(idea="A waiter crosses the dining room", duration_seconds=10)
+    )
+    components.orchestrator.plan_project(project.id)
+    approve_storyboard_and_references(components, project.id)
+    components.worker.run_until_idle(max_jobs=30)
+    approve_keyframes(components, project.id)
+
+    scenes = components.db.list_scenes(project.id)
+    target = next(scene for scene in scenes if scene.state == SceneState.VIDEO_QUEUED)
+    queued_video = next(
+        job for job in reversed(components.db.list_jobs(project.id))
+        if job.scene_id == target.id and job.kind == JobKind.VIDEO
+    )
+    retry = components.orchestrator.regenerate_keyframes(
+        target.id,
+        RetryRequest(changed_end_prompt="Corrected motion-ready closing composition"),
+    )
+
+    assert components.db.get_job(queued_video.id).state.value == "cancelled"
+    reopened = components.db.get_scene(target.id)
+    assert retry.kind == JobKind.KEYFRAME
+    assert reopened.state == SceneState.KEYFRAMES_QUEUED
+    assert reopened.selected_start_artifact_id is None
+    assert reopened.selected_end_artifact_id is None
+
+
+def test_approved_video_can_be_retried_and_reopens_final_review(components) -> None:
+    project = components.orchestrator.create_project(
+        ProjectCreate(idea="A server completes a quiet service", duration_seconds=10)
+    )
+    components.orchestrator.plan_project(project.id)
+    approve_storyboard_and_references(components, project.id)
+    components.worker.run_until_idle(max_jobs=30)
+    approve_keyframes(components, project.id)
+    components.worker.run_until_idle(max_jobs=50)
+
+    scenes = components.db.list_scenes(project.id)
+    for scene in scenes:
+        components.orchestrator.approve_scene(
+            scene.id, ApprovalRequest(approved=True)
+        )
+    assert components.db.get_project(project.id).state == ProjectState.FINAL_REVIEW
+
+    target = components.db.list_scenes(project.id)[0]
+    retry = components.orchestrator.queue_video(
+        target.id,
+        RetryRequest(changed_prompt="Preserve the approved beat with clearer hand motion"),
+    )
+    assert retry.kind == JobKind.VIDEO
+    assert components.db.get_scene(target.id).state == SceneState.VIDEO_QUEUED
+    assert components.db.get_project(project.id).state == ProjectState.SCENES

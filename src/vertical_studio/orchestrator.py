@@ -4,10 +4,11 @@ from pathlib import Path
 from typing import Any
 from .config import Settings
 from .db import Database
-from .schemas import (ApprovalRequest, ArtifactKind, ArtifactSelection, CanonicalAssetSpec, ExecutionMode, Job, JobKind, JobState,
- KeyframeRetryPromptProposal, PlanRequest, Project, ProjectCreate, ProjectState, ProjectUpdate,
- RenderRequest, RetryPromptBundle, RetryPromptRevisionRequest, RetryRequest, Scene, SceneSpec,
- SceneState, Storyboard, VideoRetryPromptProposal)
+from .schemas import (ApprovalRequest, ArtifactKind, ArtifactSelection, CanonicalAssetPromptProposal,
+ CanonicalAssetPromptRevisionRequest, CanonicalAssetRetryRequest, CanonicalAssetSpec, ExecutionMode,
+ Job, JobKind, JobState, KeyframeRetryPromptProposal, PlanRequest, Project, ProjectCreate,
+ ProjectState, ProjectUpdate, RenderRequest, RetryPromptBundle, RetryPromptRevisionRequest,
+ RetryRequest, Scene, SceneSpec, SceneState, Storyboard, VideoRetryPromptProposal)
 from .services.gpu import GpuCoordinator
 from .services.model_gateway import ModelGateway, ModelUnavailable
 from .services.research import BraveResearchProvider
@@ -353,6 +354,78 @@ class Orchestrator:
             stable_key("canonical_asset", asset.id, payload["generation_round"], payload), payload,
         )
 
+    def get_canonical_asset_retry_prompt(self, asset_id: str) -> dict[str, str]:
+        asset = self.db.get_canonical_asset(asset_id)
+        project = self.db.get_project(asset.project_id)
+        if project.state != ProjectState.REFERENCES or asset.approved:
+            raise ValueError("canonical references can only be edited during reference review")
+        return {
+            "asset_id": asset.id,
+            "role": asset.role,
+            "label": asset.label,
+            "prompt": asset.prompt,
+            "description": asset.description,
+        }
+
+    def revise_canonical_asset_prompt(
+        self, asset_id: str, request: CanonicalAssetPromptRevisionRequest
+    ) -> CanonicalAssetPromptProposal:
+        asset = self.db.get_canonical_asset(asset_id)
+        project = self.db.get_project(asset.project_id)
+        if project.state != ProjectState.REFERENCES or asset.approved:
+            raise ValueError("canonical references can only be edited during reference review")
+        if self.settings.is_simulation:
+            return CanonicalAssetPromptProposal(
+                prompt=(
+                    f"{request.prompt.rstrip()} Address this user feedback explicitly: "
+                    f"{request.feedback.strip()}"
+                ),
+                rationale="Simulation revision appended the requested correction.",
+            )
+        system = (
+            "Revise only the supplied canonical Flux reference prompt using the user's feedback. "
+            "Keep this as one isolated reference asset, not a collage or scene. Preserve its role, "
+            "identity description, visual style, and intended environment or prop details. Do not "
+            "introduce unrelated characters, rooms, props, text, panels, or alternate views. "
+            "For a character, show only that character. For an environment, show the empty location "
+            "unless its description explicitly requires a person. Keep prompt under 220 words and "
+            "rationale under 60 words. Return prompt and rationale as JSON only."
+        )
+        context = {
+            "required_visual_style": project.visual_style,
+            "asset": {
+                "role": asset.role,
+                "label": asset.label,
+                "description": asset.description,
+            },
+            "current_prompt": request.prompt,
+            "user_feedback": request.feedback,
+        }
+        with self.gpu.qwen():
+            return self.model.generate_structured(
+                CanonicalAssetPromptProposal,
+                system=system,
+                context=json.dumps(context),
+                max_tokens=800,
+            )
+
+    def retry_canonical_asset(
+        self, asset_id: str, request: CanonicalAssetRetryRequest
+    ) -> Job:
+        asset = self.db.get_canonical_asset(asset_id)
+        project = self.db.get_project(asset.project_id)
+        if project.state != ProjectState.REFERENCES or asset.approved:
+            raise ValueError("canonical references can only be edited during reference review")
+        interrupted = self.db.reset_canonical_asset(
+            asset_id,
+            request.prompt,
+            request.feedback,
+            request.revision_rationale,
+        )
+        if interrupted:
+            self.gpu.generator.interrupt()
+        return self.queue_canonical_asset(asset_id)
+
     def approve_canonical_assets(
         self, project_id: str, request: ApprovalRequest
     ) -> list[Job]:
@@ -612,15 +685,26 @@ class Orchestrator:
                 break
         return ", ".join(unique)
 
+    def _reopen_scene_work(self, project_id: str) -> None:
+        project = self.db.get_project(project_id)
+        if project.state in {ProjectState.RENDERING, ProjectState.COMPLETE}:
+            raise ValueError("generated stages cannot be retried while or after the final render")
+        if project.state == ProjectState.FINAL_REVIEW:
+            self.db.transition_project(
+                project_id, ProjectState.SCENES, "an approved scene was reopened"
+            )
+
     def regenerate_keyframes(
         self, scene_id: str, retry: RetryRequest | None = None
     ) -> Job:
         scene = self.db.get_scene(scene_id)
         if scene.state not in {
             SceneState.KEYFRAMES_READY, SceneState.KEYFRAMES_APPROVED,
-            SceneState.VIDEO_READY, SceneState.QA_FAILED, SceneState.APPROVED,
+            SceneState.VIDEO_QUEUED, SceneState.VIDEO_READY,
+            SceneState.QA_FAILED, SceneState.APPROVED,
         }:
             raise ValueError("scene keyframes are not ready to regenerate")
+        self._reopen_scene_work(scene.project_id)
         _affected, interrupted = self.db.invalidate_keyframe_chain(scene_id)
         if interrupted:
             self.gpu.generator.interrupt()
@@ -682,6 +766,7 @@ class Orchestrator:
 
     def queue_video(self, scene_id: str, retry: RetryRequest | None = None) -> Job:
         scene = self.db.get_scene(scene_id)
+        self._reopen_scene_work(scene.project_id)
         project = self.db.get_project(scene.project_id)
         active = self._active(scene_id, JobKind.VIDEO)
         if active: return active

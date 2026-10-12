@@ -120,7 +120,8 @@ function operationLabel(path,method){
   if(path.endsWith("/plan"))return "Planning storyboard with Qwen";
   if(path.includes("storyboard-approval"))return "Starting canonical reference generation";
   if(path.includes("canonical-assets-approval"))return "Saving canonical reference review";
-  if(path.includes("retry-prompts"))return "Qwen is revising the selected stage prompts";
+  if(path.includes("/canonical-assets/")&&path.endsWith("/retry"))return "Regenerating the canonical reference with Flux";
+  if(path.includes("retry-prompts")||path.includes("retry-prompt/revise"))return "Qwen is revising the selected stage prompts";
   if(path.includes("retry-keyframes"))return "Regenerating keyframes with Flux";
   if(path.includes("keyframe-approval"))return "Saving keyframe approval";
   if(path.includes("retry-video"))return "Regenerating the scene with Wan";
@@ -438,7 +439,14 @@ function renderDetail(){
       controls='<small>Waiting for the regenerated previous scene to be approved.</small>';
     }
     if(["video_ready","qa_failed"].includes(scene.state)){
-      controls=`<button data-approve-video="${scene.id}">Approve video</button><button data-retry-video="${scene.id}">Retry video</button>`;
+      controls=`<button data-approve-video="${scene.id}">Approve video</button>
+        <button data-retry-video="${scene.id}">Edit & retry video</button>
+        <button data-retry-kf="${scene.id}">Edit & retry keyframes</button>`;
+    }else if(["keyframes_approved","video_queued"].includes(scene.state)){
+      controls=`<button data-retry-kf="${scene.id}">Edit & retry keyframes</button>`;
+    }else if(scene.state==="approved"&&!["rendering","complete"].includes(project.state)){
+      controls=`<button data-retry-video="${scene.id}">Edit & retry video</button>
+        <button data-retry-kf="${scene.id}">Edit & retry keyframes</button>`;
     }
 
     return `
@@ -468,10 +476,18 @@ function renderDetail(){
       <span>${canonical_assets.filter(asset=>asset.approved).length}/${canonical_assets.length} approved</span></div>
       <div class="canonical-grid">${canonical_assets.map(asset=>{
         const artifact=artifacts.find(item=>item.id===asset.artifact_id);
+        const activeJob=[...jobs].reverse().find(job=>
+          job.kind==="canonical_asset"&&job.payload?.canonical_asset_id===asset.id&&
+          ["queued","running"].includes(job.state)
+        );
+        const referenceAction=project.state==="references"&&!asset.approved&&!activeJob
+          ?`<button data-retry-reference="${asset.id}">Edit & regenerate</button>`
+          :"";
         return `<article class="canonical-card">
-          ${artifact?`<img src="/api/artifacts/${artifact.id}/content" alt="${esc(asset.label)}">`:`<div class="reference-placeholder">Generating…</div>`}
+          ${artifact?`<img src="/api/artifacts/${artifact.id}/content" alt="${esc(asset.label)}">`:`<div class="reference-placeholder">${activeJob?"Generating...":"Not generated"}</div>`}
           <div><span class="badge">${esc(asset.role)}</span><h3>${esc(asset.label)}</h3>
-          <p>${esc(asset.description||asset.prompt)}</p><small>${esc(asset.key)}</small></div>
+          <p>${esc(asset.description||asset.prompt)}</p><small>${esc(asset.key)}</small>
+          <div class="card-actions">${referenceAction}</div></div>
         </article>`;
       }).join("")}</div>
     </section>
@@ -518,6 +534,7 @@ function bindActions(){
   document.querySelectorAll("[data-retry-kf]").forEach(button=>button.onclick=()=>openGuidedRetry(button.dataset.retryKf,"keyframe",button));
   document.querySelectorAll("[data-approve-video]").forEach(button=>button.onclick=()=>post(`/api/scenes/${button.dataset.approveVideo}/approval`,{approved:true,notes:""}));
   document.querySelectorAll("[data-retry-video]").forEach(button=>button.onclick=()=>openGuidedRetry(button.dataset.retryVideo,"video",button));
+  document.querySelectorAll("[data-retry-reference]").forEach(button=>button.onclick=()=>openCanonicalRetry(button.dataset.retryReference,button));
   document.querySelectorAll("[data-edit-scene]").forEach(button=>button.onclick=()=>editScene(button.dataset.editScene));
   document.querySelectorAll("[data-delete-scene]").forEach(button=>button.onclick=()=>deleteScene(button.dataset.deleteScene));
   const history=q("#history-panel");
@@ -598,6 +615,7 @@ async function openGuidedRetry(sceneId,stage,trigger=null){
   if(trigger)trigger.disabled=true;
   form.reset();
   form.elements.scene_id.value=sceneId;
+  form.elements.asset_id.value="";
   form.elements.stage.value=stage;
   form.elements.revision_rationale.value="";
   form.dataset.revised="false";
@@ -607,6 +625,8 @@ async function openGuidedRetry(sceneId,stage,trigger=null){
   q("#retry-start-field").hidden=true;
   q("#retry-end-field").hidden=stage!=="keyframe";
   q("#retry-video-field").hidden=stage!=="video";
+  q("#retry-reference-field").hidden=true;
+  q("#retry-negative-field").hidden=false;
   q("#retry-title").textContent=stage==="keyframe"?"Revise Flux keyframe prompts":"Revise Wan video prompt";
   q("#retry-description").textContent=stage==="keyframe"
     ?"Describe what is wrong with this scene's keyframes. Qwen will revise only the Flux prompts."
@@ -632,6 +652,46 @@ async function openGuidedRetry(sceneId,stage,trigger=null){
   }
 }
 
+async function openCanonicalRetry(assetId,trigger=null){
+  if(trigger?.disabled)return;
+  const dialog=q("#retry-dialog");
+  const form=q("#retry-form");
+  const reviseButton=q("#revise-retry-prompts");
+  const submitButton=form.querySelector('[type="submit"]');
+  if(trigger)trigger.disabled=true;
+  form.reset();
+  form.elements.scene_id.value="";
+  form.elements.asset_id.value=assetId;
+  form.elements.stage.value="reference";
+  form.elements.revision_rationale.value="";
+  form.dataset.revised="false";
+  form.dataset.busy="true";
+  reviseButton.disabled=true;
+  submitButton.disabled=true;
+  q("#retry-start-field").hidden=true;
+  q("#retry-end-field").hidden=true;
+  q("#retry-video-field").hidden=true;
+  q("#retry-reference-field").hidden=false;
+  q("#retry-negative-field").hidden=true;
+  q("#retry-title").textContent="Revise canonical reference prompt";
+  q("#retry-description").textContent="Describe what is wrong with this reference. Qwen will revise only this asset prompt.";
+  q("#retry-rationale").hidden=true;
+  setRetryStatus("Loading the current reference prompt...");
+  if(!dialog.open)dialog.showModal();
+  try{
+    const bundle=await api("/api/canonical-assets/"+assetId+"/retry-prompt");
+    form.elements.reference_prompt.value=bundle.prompt||"";
+    setRetryStatus("Prompt loaded. Add feedback, then ask Qwen to revise.","ready");
+    reviseButton.disabled=false;
+  }catch(error){
+    setRetryStatus(error.message,"error");
+    toast(error.message);
+  }finally{
+    delete form.dataset.busy;
+    if(trigger)trigger.disabled=false;
+  }
+}
+
 async function reviseGuidedRetry(){
   const form=q("#retry-form");
   if(form.dataset.busy==="true"||!form.reportValidity())return;
@@ -646,24 +706,39 @@ async function reviseGuidedRetry(){
   button.textContent="Qwen is revising...";
   setRetryStatus("Qwen is revising the selected prompts. Please wait - this can take a minute.");
   try{
-    const proposal=await api(
-      "/api/scenes/"+form.elements.scene_id.value+"/retry-prompts/"+stage+"/revise",
-      {
-        method:"POST",
-        body:JSON.stringify({
-          stage,
-          feedback:form.elements.feedback.value,
-          start_prompt:stage==="keyframe"&&form.elements.start_prompt.value?form.elements.start_prompt.value:null,
-          end_prompt:stage==="keyframe"?form.elements.end_prompt.value:null,
-          video_prompt:stage==="video"?form.elements.video_prompt.value:null,
-          negative_prompt:form.elements.negative_prompt.value
-        })
-      }
-    );
-    form.elements.start_prompt.value=proposal.start_prompt||"";
-    form.elements.end_prompt.value=proposal.end_prompt||"";
-    form.elements.video_prompt.value=proposal.video_prompt||"";
-    form.elements.negative_prompt.value=proposal.negative_prompt||"";
+    const proposal=stage==="reference"
+      ?await api(
+        "/api/canonical-assets/"+form.elements.asset_id.value+"/retry-prompt/revise",
+        {
+          method:"POST",
+          body:JSON.stringify({
+            feedback:form.elements.feedback.value,
+            prompt:form.elements.reference_prompt.value
+          })
+        }
+      )
+      :await api(
+        "/api/scenes/"+form.elements.scene_id.value+"/retry-prompts/"+stage+"/revise",
+        {
+          method:"POST",
+          body:JSON.stringify({
+            stage,
+            feedback:form.elements.feedback.value,
+            start_prompt:stage==="keyframe"&&form.elements.start_prompt.value?form.elements.start_prompt.value:null,
+            end_prompt:stage==="keyframe"?form.elements.end_prompt.value:null,
+            video_prompt:stage==="video"?form.elements.video_prompt.value:null,
+            negative_prompt:form.elements.negative_prompt.value
+          })
+        }
+      );
+    if(stage==="reference"){
+      form.elements.reference_prompt.value=proposal.prompt||"";
+    }else{
+      form.elements.start_prompt.value=proposal.start_prompt||"";
+      form.elements.end_prompt.value=proposal.end_prompt||"";
+      form.elements.video_prompt.value=proposal.video_prompt||"";
+      form.elements.negative_prompt.value=proposal.negative_prompt||"";
+    }
     const rationale=q("#retry-rationale");
     rationale.textContent=proposal.rationale||"Qwen's revised prompts are ready for review.";
     rationale.hidden=false;
@@ -753,11 +828,16 @@ q("#retry-form").onsubmit=async event=>{
   const form=event.currentTarget;
   if(form.dataset.revised!=="true"||form.dataset.busy==="true")return;
   const sceneId=form.elements.scene_id.value;
+  const assetId=form.elements.asset_id.value;
   const stage=form.elements.stage.value;
   const submitButton=form.querySelector('[type="submit"]');
   const reviseButton=q("#revise-retry-prompts");
   const original=submitButton.textContent;
-  const body={
+  const body=stage==="reference"?{
+    prompt:form.elements.reference_prompt.value,
+    feedback:form.elements.feedback.value,
+    revision_rationale:form.elements.revision_rationale.value
+  }:{
     changed_negative_prompt:form.elements.negative_prompt.value,
     feedback:form.elements.feedback.value,
     revision_rationale:form.elements.revision_rationale.value,
@@ -766,7 +846,7 @@ q("#retry-form").onsubmit=async event=>{
   if(stage==="keyframe"){
     body.changed_start_prompt=form.elements.start_prompt.value||null;
     body.changed_end_prompt=form.elements.end_prompt.value;
-  }else{
+  }else if(stage==="video"){
     body.changed_prompt=form.elements.video_prompt.value;
   }
   form.dataset.busy="true";
@@ -774,13 +854,17 @@ q("#retry-form").onsubmit=async event=>{
   reviseButton.disabled=true;
   submitButton.textContent="Queuing regeneration...";
   setRetryStatus(
-    stage==="keyframe"
-      ?"Queuing the Flux keyframe retry..."
-      :"Queuing the Wan video retry..."
+    stage==="reference"
+      ?"Queuing the Flux reference retry..."
+      :stage==="keyframe"
+        ?"Queuing the Flux keyframe retry..."
+        :"Queuing the Wan video retry..."
   );
   try{
-    const endpoint=stage==="keyframe"?"retry-keyframes":"retry-video";
-    const job=await mutate("/api/scenes/"+sceneId+"/"+endpoint,"POST",body);
+    const endpoint=stage==="reference"
+      ?"/api/canonical-assets/"+assetId+"/retry"
+      :"/api/scenes/"+sceneId+"/"+(stage==="keyframe"?"retry-keyframes":"retry-video");
+    const job=await mutate(endpoint,"POST",body);
     if(!job?.id)throw new Error("The server did not confirm a regeneration job.");
     setRetryStatus("Retry job "+job.id.slice(0,8)+" queued successfully.","ready");
     if(state.detail){
@@ -789,10 +873,14 @@ q("#retry-form").onsubmit=async event=>{
       else state.detail.jobs.push(job);
       const scene=state.detail.scenes.find(item=>item.id===sceneId);
       if(scene)scene.state=stage==="keyframe"?"keyframes_queued":"video_queued";
+      if(stage==="reference"){
+        const asset=state.detail.canonical_assets.find(item=>item.id===assetId);
+        if(asset){asset.artifact_id=null;asset.approved=false}
+      }
       state.detailSignature=null;
       renderDetail();
     }
-    toast((stage==="keyframe"?"Keyframe":"Video")+" regeneration queued");
+    toast((stage==="reference"?"Reference":stage==="keyframe"?"Keyframe":"Video")+" regeneration queued");
     q("#retry-dialog").close();
     await refreshDetail();
   }catch(error){

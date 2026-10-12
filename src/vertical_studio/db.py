@@ -794,6 +794,43 @@ class Database:
             )
         return self.get_canonical_asset(asset_id)
 
+    def reset_canonical_asset(
+        self, asset_id: str, prompt: str, feedback: str = "", rationale: str = ""
+    ) -> bool:
+        asset = self.get_canonical_asset(asset_id)
+        active = [
+            job for job in self.list_jobs(asset.project_id)
+            if job.kind == JobKind.CANONICAL_ASSET
+            and job.payload.get("canonical_asset_id") == asset_id
+            and job.state in {JobState.QUEUED, JobState.RUNNING}
+        ]
+        running = any(job.state == JobState.RUNNING for job in active)
+        now = utc_now()
+        with self.transaction() as connection:
+            for job in active:
+                connection.execute(
+                    "UPDATE jobs SET state=?, lease_owner=NULL, lease_expires_at=NULL, updated_at=? "
+                    "WHERE id=? AND state IN (?,?)",
+                    (JobState.CANCELLED, now, job.id, JobState.QUEUED, JobState.RUNNING),
+                )
+            connection.execute(
+                "UPDATE canonical_assets SET prompt=?, artifact_id=NULL, approved=0, updated_at=? "
+                "WHERE id=?",
+                (prompt, now, asset_id),
+            )
+            self.add_event(
+                connection,
+                asset.project_id,
+                "canonical_asset.regeneration_started",
+                {
+                    "canonical_asset_id": asset_id,
+                    "feedback": feedback,
+                    "revision_rationale": rationale,
+                    "cancelled_job_ids": [job.id for job in active],
+                },
+            )
+        return running
+
     def approve_canonical_assets(self, project_id: str, approved: bool) -> list[CanonicalAsset]:
         with self.transaction() as connection:
             rows = connection.execute(
