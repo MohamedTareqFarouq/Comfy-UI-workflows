@@ -2,7 +2,7 @@
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#10131a"><title>Vertical Video Studio</title>
-<link rel="manifest" href="/manifest.webmanifest"><link rel="stylesheet" href="/styles.css?v=guided-retry-4">
+<link rel="manifest" href="/manifest.webmanifest"><link rel="stylesheet" href="/styles.css?v=reference-upload-2">
 </head><body>
 <header><div><span class="eyebrow">LOCAL PRODUCTION</span><h1>Vertical Video Studio</h1></div>
 <div class="header-actions"><a href="/observability.html">Observability</a><div id="runtime" class="status">Connecting...</div></div></header>
@@ -24,12 +24,13 @@
 </select></label>
 <label id="reference-file-field" hidden>Reference video<input type="file" name="reference_file" accept="video/mp4,video/quicktime,video/webm,video/x-matroska"></label>
 <label>Title<input name="title" placeholder="Fogbound arrival"></label>
-<label>Idea<textarea name="idea" required minlength="3" placeholder="Describe the story or concept..."></textarea></label>
+<label><span id="idea-label">Idea</span><textarea name="idea" required minlength="3" placeholder="Describe the story or concept..."></textarea></label>
 <div class="row"><label>Duration<select name="duration_seconds"><option>10</option><option selected>15</option><option>20</option><option>30</option></select></label>
 <label>Style<input name="visual_style" value="cinematic 3D cartoon"></label></div>
 <label class="check"><input type="checkbox" name="research_required"> This subject needs current factual research</label>
 <label>Source URLs (optional, one per line)<textarea name="source_urls" placeholder="https://example.com/source"></textarea></label>
-<div class="actions"><button type="button" data-close>Cancel</button><button class="primary">Create & plan</button></div>
+<div id="create-status" class="notice create-status" role="status" aria-live="polite" hidden></div>
+<div class="actions"><button type="button" data-close>Cancel</button><button type="submit" class="primary">Create & plan</button></div>
 </form></dialog>
 <dialog id="retry-dialog"><form id="retry-form">
 <input type="hidden" name="scene_id"><input type="hidden" name="asset_id"><input type="hidden" name="stage"><input type="hidden" name="revision_rationale">
@@ -45,5 +46,5 @@
 <div id="retry-rationale" class="notice" hidden></div>
 <div class="actions"><button type="button" data-retry-close>Cancel</button><button type="button" id="revise-retry-prompts">Ask Qwen to revise</button><button type="submit" class="primary" disabled>Accept & regenerate</button></div>
 </form></dialog>
-<div id="toast"></div><script src="/app.js?v=reference-remake-1" defer></script>
+<div id="toast"></div><script src="/app.js?v=reference-upload-2" defer></script>
 </body></html>

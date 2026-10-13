@@ -957,27 +957,70 @@ q("#retry-form").onsubmit=async event=>{
 q("#new-project").onclick=()=>q("#create-dialog").showModal();
 document.querySelector("[data-close]").onclick=()=>q("#create-dialog").close();
 
+function setCreateStatus(message,tone="working"){
+  const status=q("#create-status");
+  status.textContent=message;
+  status.dataset.tone=tone;
+  status.hidden=!message;
+}
+
+function uploadReference(projectId,file,onProgress){
+  return new Promise((resolve,reject)=>{
+    const request=new XMLHttpRequest();
+    request.open("POST",`/api/projects/${projectId}/reference/upload`);
+    request.setRequestHeader("x-filename",file.name);
+    request.upload.onprogress=event=>{
+      if(event.lengthComputable)onProgress(Math.round(event.loaded/event.total*100));
+    };
+    request.onerror=()=>reject(new Error("Reference upload failed. Check the server connection and try again."));
+    request.onload=()=>{
+      let body={};
+      try{body=request.responseText?JSON.parse(request.responseText):{}}catch(_error){}
+      if(request.status>=200&&request.status<300)resolve(body);
+      else reject(new Error(body.detail||request.statusText||"Reference upload failed."));
+    };
+    request.send(file);
+  });
+}
+
 q("#source-mode").onchange=event=>{
   const reference=event.target.value==="reference";
   q("#reference-file-field").hidden=!reference;
   q("#reference-file-field input").required=reference;
+  const idea=q('#create-form textarea[name="idea"]');
+  idea.required=!reference;
+  idea.placeholder=reference
+    ?"Optional: describe what should change from the reference..."
+    :"Describe the story or concept...";
+  q("#idea-label").textContent=reference?"Change brief (optional)":"Idea";
 };
 
 q("#create-form").onsubmit=async event=>{
   event.preventDefault();
-  const form=new FormData(event.target);
+  const formElement=event.currentTarget;
+  if(formElement.dataset.busy==="true")return;
+  const form=new FormData(formElement);
   const sourceMode=String(form.get("source_mode")||"description");
   const referenceFile=form.get("reference_file");
   if(sourceMode==="reference"&&!(referenceFile instanceof File&&referenceFile.size)){
     toast("Choose a reference video.");
     return;
   }
+  const submitButton=formElement.querySelector('[type="submit"]');
+  const cancelButton=formElement.querySelector("[data-close]");
+  const originalLabel=submitButton.textContent;
+  formElement.dataset.busy="true";
+  submitButton.disabled=true;
+  cancelButton.disabled=true;
+  submitButton.textContent="Creating project...";
+  setCreateStatus("Creating the project...");
   try{
+    const enteredIdea=String(form.get("idea")||"").trim();
     const project=await api("/api/projects",{
       method:"POST",
       body:JSON.stringify({
         title:form.get("title")||null,
-        idea:form.get("idea"),
+        idea:enteredIdea||(sourceMode==="reference"?"Recreate the reference video":""),
         duration_seconds:Number(form.get("duration_seconds")),
         visual_style:form.get("visual_style"),
         research_required:form.get("research_required")==="on",
@@ -986,26 +1029,37 @@ q("#create-form").onsubmit=async event=>{
       })
     });
     if(sourceMode==="reference"){
-      await api(`/api/projects/${project.id}/reference/upload`,{
-        method:"POST",
-        headers:{"x-filename":referenceFile.name},
-        body:referenceFile
-      });
-      await api(`/api/projects/${project.id}/reference/analyze`,{
-        method:"POST",body:JSON.stringify({})
-      });
-    }else{
-      await api(`/api/projects/${project.id}/plan`,{
-        method:"POST",body:JSON.stringify({})
+      submitButton.textContent="Uploading reference...";
+      setCreateStatus("Uploading reference video: 0%");
+      await uploadReference(project.id,referenceFile,percent=>{
+        setCreateStatus(`Uploading reference video: ${percent}%`);
       });
     }
     q("#create-dialog").close();
-    event.target.reset();
+    formElement.reset();
     q("#reference-file-field").hidden=true;
+    q("#reference-file-field input").required=false;
+    const resetIdea=q('#create-form textarea[name="idea"]');
+    resetIdea.required=true;
+    resetIdea.placeholder="Describe the story or concept...";
+    q("#idea-label").textContent="Idea";
     await openProject(project.id);
+    if(sourceMode==="reference"){
+      await mutate(`/api/projects/${project.id}/reference/analyze`,"POST",{});
+    }else{
+      await mutate(`/api/projects/${project.id}/plan`,"POST",{});
+    }
+    await refreshDetail();
     await refreshProjects();
   }catch(error){
+    setCreateStatus(error.message,"error");
     toast(error.message);
+  }finally{
+    delete formElement.dataset.busy;
+    submitButton.disabled=false;
+    cancelButton.disabled=false;
+    submitButton.textContent=originalLabel;
+    if(!q("#create-dialog").open)setCreateStatus("");
   }
 };
 
