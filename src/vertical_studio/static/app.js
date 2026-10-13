@@ -12,10 +12,11 @@ const state={
 const q=selector=>document.querySelector(selector);
 
 async function api(path,options={}){
-  const response=await fetch(path,{
-    headers:{"Content-Type":"application/json"},
-    ...options
-  });
+  const isBinary=options.body instanceof Blob;
+  const headers=isBinary
+    ?{...(options.headers||{})}
+    :{"Content-Type":"application/json",...(options.headers||{})};
+  const response=await fetch(path,{...options,headers});
   if(!response.ok){
     const body=await response.json().catch(()=>({detail:response.statusText}));
     throw new Error(body.detail||response.statusText);
@@ -54,6 +55,8 @@ const jobLabels={
 function projectListActivity(project){
   const map={
     draft:["ready","Ready"],
+    reference_analysis:["working","Analyzing reference"],
+    reference_review:["waiting","Review reference"],
     research_needed:["waiting","Needs research"],
     planning:["working","Planning"],
     storyboard_review:["waiting","Awaiting approval"],
@@ -101,6 +104,8 @@ function projectActivity(detail){
   }
   const map={
     draft:["ready","Ready","Ready to plan the storyboard"],
+    reference_analysis:["working","Analyzing","Qwen is reconstructing the reference blueprint"],
+    reference_review:["waiting","Waiting for you","Review and approve the reference blueprint"],
     research_needed:["waiting","Waiting","Research or source material is required"],
     planning:["stopped","Stopped","Planning did not finish; press Plan storyboard to retry"],
     storyboard_review:["waiting","Waiting for you","Review, edit, regenerate, or approve the storyboard"],
@@ -118,6 +123,8 @@ function projectActivity(detail){
 
 function operationLabel(path,method){
   if(path.endsWith("/plan"))return "Planning storyboard with Qwen";
+  if(path.endsWith("/reference/analyze"))return "Analyzing reference video with Qwen";
+  if(path.endsWith("/reference/approval"))return "Approving reference blueprint";
   if(path.includes("storyboard-approval"))return "Starting canonical reference generation";
   if(path.includes("canonical-assets-approval"))return "Saving canonical reference review";
   if(path.includes("/canonical-assets/")&&path.endsWith("/retry"))return "Regenerating the canonical reference with Flux";
@@ -340,7 +347,8 @@ function renderProjectHistory(jobs,attempts,events,approvals){
 function renderDetail(){
   const {
     project,scenes,artifacts,jobs,attempts=[],canonical_assets=[],
-    qa_reports=[],approvals=[],render_manifests=[],events=[]
+    qa_reports=[],approvals=[],render_manifests=[],events=[],
+    reference_source=null,reference_analysis=null
   }=state.detail;
 
   q("#empty").hidden=true;
@@ -348,12 +356,21 @@ function renderDetail(){
 
   const actions=[];
   const allScenesApproved=scenes.length&&scenes.every(scene=>scene.state==="approved");
-  if(project.state==="draft"||project.state==="planning"){
+  if((project.state==="draft"||project.state==="planning")&&project.source_mode==="description"){
     actions.push('<button class="primary" data-action="plan">Plan storyboard</button>');
+  }
+  if(project.source_mode==="reference"&&["draft","reference_analysis"].includes(project.state)&&reference_source){
+    actions.push('<button class="primary" data-action="analyze-reference">Analyze reference</button>');
+  }
+  if(project.state==="reference_review"){
+    actions.push('<button class="primary" data-action="approve-reference">Approve reference blueprint</button>');
+    actions.push('<button data-action="reanalyze-reference">Analyze again</button>');
   }
   if(project.state==="storyboard_review"){
     actions.push('<button class="primary" data-action="approve-story">Approve storyboard</button>');
-    actions.push('<button data-action="regenerate-story">Regenerate storyboard</button>');
+    if(project.source_mode==="description"){
+      actions.push('<button data-action="regenerate-story">Regenerate storyboard</button>');
+    }
     actions.push('<button data-action="edit-project">Edit project</button>');
   }
   const referencesReady=canonical_assets.length&&canonical_assets.every(asset=>asset.artifact_id);
@@ -371,7 +388,7 @@ function renderDetail(){
   }else if(!["complete","rendering"].includes(project.state)){
     actions.push('<button data-action="pause">Pause</button><button data-action="cancel">Cancel jobs</button>');
   }
-  if(!["references","scenes","rendering"].includes(project.state)){
+  if(project.source_mode==="description"&&!["references","scenes","rendering"].includes(project.state)){
     actions.push('<button data-action="retry-project">Restart project</button>');
   }
   actions.push('<button class="danger" data-action="delete-project">Delete project</button>');
@@ -470,6 +487,36 @@ function renderDetail(){
     `;
   }).join("");
 
+  const blueprint=reference_analysis?.blueprint;
+  const evidenceFrames=artifacts.filter(
+    artifact=>artifact.metadata?.role==="reference_evidence"
+  );
+  const referenceHtml=project.source_mode==="reference"?`
+    <section class="canonical-panel">
+      <div class="section-title"><div><span class="eyebrow">REFERENCE BLUEPRINT</span>
+      <h2>${blueprint?esc(blueprint.summary):"Source video ready for analysis"}</h2></div>
+      <span>${reference_analysis?"Version "+reference_analysis.version:"Not analyzed"}</span></div>
+      ${reference_source?.artifact_id?`<div class="media"><video controls preload="metadata"
+        src="/api/artifacts/${reference_source.artifact_id}/content"></video></div>`:""}
+      ${blueprint?`
+        <div class="history-columns">
+          <section><h3>Visual style</h3><b>${esc(blueprint.style.medium)}</b>
+          <p>${esc(blueprint.style.visual_language)}</p>
+          <small>${esc((blueprint.style.palette||[]).join(" · "))}</small></section>
+          <section><h3>Motion language</h3><b>${esc(blueprint.motion.animation_style)}</b>
+          <p>${esc(blueprint.motion.camera_language)}</p>
+          <small>${esc(blueprint.motion.cadence)}</small></section>
+          <section><h3>Extracted structure</h3>
+          <p>${blueprint.canonical_assets.length} canonical assets · ${blueprint.scenes.length} scenes</p>
+          <small>${esc((blueprint.ambiguities||[]).join(" · ")||"No unresolved ambiguities")}</small></section>
+        </div>
+        <div class="media-grid">${evidenceFrames.map((artifact,index)=>`
+          <div class="media"><img src="/api/artifacts/${artifact.id}/content">
+          <small>Evidence ${index+1}</small></div>`).join("")}</div>
+      `:"<p>Upload complete. Run analysis to extract style, characters, environments and movement.</p>"}
+    </section>
+  `:"";
+
   const canonicalHtml=canonical_assets.length?`
     <section class="canonical-panel">
       <div class="section-title"><div><span class="eyebrow">CANONICAL REFERENCES</span><h2>Identity and environment anchors</h2></div>
@@ -513,6 +560,7 @@ function renderDetail(){
     </div>
     <div id="activity-panel" class="activity-panel" role="status" aria-live="polite"></div>
     <div class="toolbar">${actions.join("")}</div>
+    ${referenceHtml}
     ${canonicalHtml}
     ${characterHtml}
     <div class="notice">${project.execution_mode==="real"
@@ -768,6 +816,17 @@ async function approveKeyframes(button){
 
 async function act(name){
   if(name==="plan")return post(`/api/projects/${state.current}/plan`,{});
+  if(name==="analyze-reference")return post(`/api/projects/${state.current}/reference/analyze`,{});
+  if(name==="approve-reference")return post(
+    `/api/projects/${state.current}/reference/approval`,{approved:true,notes:""}
+  );
+  if(name==="reanalyze-reference"){
+    await post(
+      `/api/projects/${state.current}/reference/approval`,
+      {approved:false,notes:"Run a fresh analysis"}
+    );
+    return post(`/api/projects/${state.current}/reference/analyze`,{});
+  }
   if(name==="approve-story")return post(`/api/projects/${state.current}/storyboard-approval`,{approved:true,notes:""});
   if(name==="approve-references")return post(`/api/projects/${state.current}/canonical-assets-approval`,{approved:true,notes:""});
   if(name==="regenerate-references")return post(`/api/projects/${state.current}/canonical-assets-approval`,{approved:false,notes:"Regenerate all canonical references"});
@@ -898,9 +957,21 @@ q("#retry-form").onsubmit=async event=>{
 q("#new-project").onclick=()=>q("#create-dialog").showModal();
 document.querySelector("[data-close]").onclick=()=>q("#create-dialog").close();
 
+q("#source-mode").onchange=event=>{
+  const reference=event.target.value==="reference";
+  q("#reference-file-field").hidden=!reference;
+  q("#reference-file-field input").required=reference;
+};
+
 q("#create-form").onsubmit=async event=>{
   event.preventDefault();
   const form=new FormData(event.target);
+  const sourceMode=String(form.get("source_mode")||"description");
+  const referenceFile=form.get("reference_file");
+  if(sourceMode==="reference"&&!(referenceFile instanceof File&&referenceFile.size)){
+    toast("Choose a reference video.");
+    return;
+  }
   try{
     const project=await api("/api/projects",{
       method:"POST",
@@ -910,13 +981,28 @@ q("#create-form").onsubmit=async event=>{
         duration_seconds:Number(form.get("duration_seconds")),
         visual_style:form.get("visual_style"),
         research_required:form.get("research_required")==="on",
+        source_mode:sourceMode,
         source_urls:String(form.get("source_urls")||"").split(/\r?\n/).map(value=>value.trim()).filter(Boolean)
       })
     });
+    if(sourceMode==="reference"){
+      await api(`/api/projects/${project.id}/reference/upload`,{
+        method:"POST",
+        headers:{"x-filename":referenceFile.name},
+        body:referenceFile
+      });
+      await api(`/api/projects/${project.id}/reference/analyze`,{
+        method:"POST",body:JSON.stringify({})
+      });
+    }else{
+      await api(`/api/projects/${project.id}/plan`,{
+        method:"POST",body:JSON.stringify({})
+      });
+    }
     q("#create-dialog").close();
     event.target.reset();
+    q("#reference-file-field").hidden=true;
     await openProject(project.id);
-    await post(`/api/projects/${project.id}/plan`,{});
     await refreshProjects();
   }catch(error){
     toast(error.message);

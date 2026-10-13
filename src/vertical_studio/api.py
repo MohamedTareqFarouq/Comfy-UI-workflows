@@ -1,9 +1,9 @@
 from __future__ import annotations
-import asyncio, threading
+import asyncio, tempfile, threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -117,10 +117,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "qa_reports": components.db.list_qa_reports(project_id),
                 "approvals": components.db.list_approvals(project_id),
                 "render_manifests": components.db.list_render_manifests(project_id),
+                "reference_source": components.db.get_reference_source(project_id),
+                "reference_analysis": components.db.get_reference_analysis(project_id),
                 "events": components.db.events_since(project_id),
             }
         except Exception as exc: fail(exc)
 
+    @app.post("/api/projects/{project_id}/reference/upload")
+    async def upload_reference(project_id: str, request: Request):
+        original_name = Path(
+            request.headers.get("x-filename", "reference.mp4")
+        ).name
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                prefix="vvs-reference-", suffix=Path(original_name).suffix,
+                dir=settings.data_dir, delete=False,
+            ) as stream:
+                temporary = Path(stream.name)
+                size = 0
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > 250 * 1024 * 1024:
+                        raise ValueError("reference video exceeds the 250 MB limit")
+                    stream.write(chunk)
+            return components.orchestrator.import_reference_file(
+                project_id, temporary, original_name
+            )
+        except Exception as exc:
+            fail(exc)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+    @app.post("/api/projects/{project_id}/reference/analyze")
+    def analyze_reference(project_id: str):
+        try:
+            return components.orchestrator.analyze_reference(project_id)
+        except Exception as exc:
+            fail(exc)
+
+    @app.post("/api/projects/{project_id}/reference/approval")
+    def approve_reference(project_id: str, request: ApprovalRequest):
+        try:
+            return components.orchestrator.approve_reference_analysis(
+                project_id, request
+            )
+        except Exception as exc:
+            fail(exc)
     @app.post("/api/projects/{project_id}/plan")
     def plan(project_id: str, request: PlanRequest = PlanRequest()):
         try: return components.orchestrator.plan_project(project_id, request)

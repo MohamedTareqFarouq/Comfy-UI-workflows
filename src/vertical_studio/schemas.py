@@ -16,8 +16,15 @@ class ExecutionMode(StrEnum):
     REAL = "real"
 
 
+class SourceMode(StrEnum):
+    DESCRIPTION = "description"
+    REFERENCE = "reference"
+
+
 class ProjectState(StrEnum):
     DRAFT = "draft"
+    REFERENCE_ANALYSIS = "reference_analysis"
+    REFERENCE_REVIEW = "reference_review"
     RESEARCH_NEEDED = "research_needed"
     PLANNING = "planning"
     STORYBOARD_REVIEW = "storyboard_review"
@@ -75,6 +82,7 @@ class ProjectCreate(BaseModel):
     research_required: bool = False
     reference_paths: list[str] = Field(default_factory=list)
     source_urls: list[str] = Field(default_factory=list)
+    source_mode: SourceMode = SourceMode.DESCRIPTION
 
 
 class ProjectUpdate(BaseModel):
@@ -96,6 +104,7 @@ class Project(BaseModel):
     duration_seconds: int
     visual_style: str
     research_required: bool
+    source_mode: SourceMode = SourceMode.DESCRIPTION
     state: ProjectState
     execution_mode: ExecutionMode
     created_at: str
@@ -137,6 +146,62 @@ class CanonicalAssetSpec(BaseModel):
     label: str = Field(min_length=1, max_length=160)
     prompt: str = Field(min_length=1, max_length=2000)
     description: str = Field(default="", max_length=1200)
+
+
+class ReferenceStyleProfile(BaseModel):
+    medium: str = Field(min_length=1, max_length=300)
+    visual_language: str = Field(min_length=1, max_length=1600)
+    palette: list[str] = Field(default_factory=list, max_length=12)
+    lighting: str = Field(default="", max_length=800)
+    materials: str = Field(default="", max_length=800)
+    avoid: list[str] = Field(default_factory=list, max_length=16)
+
+
+class ReferenceMotionProfile(BaseModel):
+    animation_style: str = Field(min_length=1, max_length=1000)
+    cadence: str = Field(default="", max_length=500)
+    physicality: str = Field(default="", max_length=800)
+    camera_language: str = Field(default="", max_length=800)
+    transition_language: str = Field(default="", max_length=500)
+
+
+class ReferenceBlueprint(BaseModel):
+    summary: str = Field(min_length=1, max_length=2000)
+    style: ReferenceStyleProfile
+    motion: ReferenceMotionProfile
+    character_bible: dict[str, Any] = Field(default_factory=dict)
+    canonical_assets: list[CanonicalAssetSpec] = Field(default_factory=list, max_length=16)
+    scenes: list[SceneSpec] = Field(min_length=3, max_length=10)
+    evidence_summary: list[str] = Field(default_factory=list, max_length=32)
+    ambiguities: list[str] = Field(default_factory=list, max_length=24)
+
+    def as_storyboard(self) -> "Storyboard":
+        style_text = "; ".join(filter(None, [
+            self.style.medium,
+            self.style.visual_language,
+            f"palette: {', '.join(self.style.palette)}" if self.style.palette else "",
+            f"lighting: {self.style.lighting}" if self.style.lighting else "",
+            f"materials: {self.style.materials}" if self.style.materials else "",
+        ]))
+        character_assets = [
+            asset for asset in self.canonical_assets if asset.role == "character"
+        ]
+        return Storyboard(
+            summary=self.summary,
+            requires_character_sheet=bool(character_assets),
+            character_sheet_prompt=(
+                "Create a consistent turnaround sheet for the recurring characters, "
+                f"faithfully preserving the analyzed reference style: {style_text}"
+                if character_assets else ""
+            ),
+            character_bible={
+                **self.character_bible,
+                "reference_visual_style": self.style.model_dump(),
+                "reference_motion_style": self.motion.model_dump(),
+            },
+            canonical_assets=self.canonical_assets,
+            scenes=self.scenes,
+        )
 
 
 class Storyboard(BaseModel):

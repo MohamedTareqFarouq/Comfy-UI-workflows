@@ -7,10 +7,13 @@ from .db import Database
 from .schemas import (ApprovalRequest, ArtifactKind, ArtifactSelection, CanonicalAssetPromptProposal,
  CanonicalAssetPromptRevisionRequest, CanonicalAssetRetryRequest, CanonicalAssetSpec, ExecutionMode,
  Job, JobKind, JobState, KeyframeRetryPromptProposal, PlanRequest, Project, ProjectCreate,
- ProjectState, ProjectUpdate, RenderRequest, RetryPromptBundle, RetryPromptRevisionRequest,
- RetryRequest, Scene, SceneSpec, SceneState, Storyboard, VideoRetryPromptProposal)
+ ProjectState, ProjectUpdate, ReferenceBlueprint, RenderRequest, RetryPromptBundle,
+ RetryPromptRevisionRequest, RetryRequest, Scene, SceneSpec, SceneState, SourceMode,
+ Storyboard, VideoRetryPromptProposal)
 from .services.gpu import GpuCoordinator
+from .services.media import extract_frames, probe_media, sha256_file
 from .services.model_gateway import ModelGateway, ModelUnavailable
+from .services.reference import ReferenceAnalyzer
 from .services.research import BraveResearchProvider
 
 def stable_key(*values: Any) -> str:
@@ -67,9 +70,174 @@ class Orchestrator:
     def create_project(self, request: ProjectCreate) -> Project:
         mode = ExecutionMode.SIMULATION if self.settings.is_simulation else ExecutionMode.REAL
         return self.db.create_project(request, mode)
+    def import_reference_file(
+        self, project_id: str, source_path: Path, original_name: str
+    ) -> dict[str, Any]:
+        project = self.db.get_project(project_id)
+        if project.source_mode != SourceMode.REFERENCE:
+            raise ValueError("project was not created in reference mode")
+        if project.state != ProjectState.DRAFT:
+            raise ValueError("reference media can only be replaced before analysis")
+        if not source_path.is_file():
+            raise ValueError("reference video is missing")
+        size = source_path.stat().st_size
+        if size <= 0 or size > 250 * 1024 * 1024:
+            raise ValueError("reference video must be between 1 byte and 250 MB")
+        suffix = Path(original_name).suffix.lower()
+        if suffix not in {".mp4", ".mov", ".webm", ".mkv", ".m4v"}:
+            raise ValueError("unsupported reference video type")
+        metadata = probe_media(source_path)
+        video_stream = next(
+            (
+                stream for stream in metadata.get("streams", [])
+                if stream.get("codec_type") == "video"
+            ),
+            None,
+        )
+        if video_stream is None:
+            raise ValueError("reference file contains no video stream")
+        duration = float(metadata.get("format", {}).get("duration") or 0)
+        if not 9.0 <= duration <= 30.5:
+            raise ValueError("reference video must be approximately 10-30 seconds")
+
+        directory = self.settings.projects_dir / project_id / "reference"
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / f"source{suffix}"
+        shutil.copy2(source_path, target)
+        digest = sha256_file(target)
+        artifact = self.db.add_artifact(
+            project_id,
+            ArtifactKind.VIDEO,
+            target,
+            digest,
+            {
+                "role": "reference_source",
+                "original_name": Path(original_name).name,
+                "probe": metadata,
+            },
+        )
+        rounded_duration = max(10, min(30, round(duration)))
+        if rounded_duration != project.duration_seconds:
+            self.db.update_project(
+                project_id, ProjectUpdate(duration_seconds=rounded_duration)
+            )
+        return self.db.add_reference_source(
+            project_id,
+            origin="upload",
+            original_name=Path(original_name).name,
+            path=target,
+            sha256=digest,
+            metadata=metadata,
+            artifact_id=artifact.id,
+        )
+
+    def analyze_reference(self, project_id: str) -> dict[str, Any]:
+        project = self.db.get_project(project_id)
+        if project.source_mode != SourceMode.REFERENCE:
+            raise ValueError("project was not created in reference mode")
+        if project.state == ProjectState.DRAFT:
+            project = self.db.transition_project(
+                project_id, ProjectState.REFERENCE_ANALYSIS
+            )
+        elif project.state != ProjectState.REFERENCE_ANALYSIS:
+            raise ValueError("reference analysis can only run before blueprint review")
+        source = self.db.get_reference_source(project_id)
+        if source is None:
+            raise ValueError("upload a reference video before analysis")
+
+        evidence_dir = (
+            self.settings.projects_dir / project_id / "reference" / "evidence"
+            / f"analysis-{len(self.db.list_artifacts(project_id)) + 1}"
+        )
+        frames = extract_frames(Path(source["path"]), evidence_dir, count=8)
+        evidence_ids = []
+        for index, frame in enumerate(frames, 1):
+            artifact = self.db.add_artifact(
+                project_id,
+                ArtifactKind.IMAGE,
+                frame,
+                sha256_file(frame),
+                {
+                    "role": "reference_evidence",
+                    "source_id": source["id"],
+                    "order": index,
+                    "sample_count": len(frames),
+                },
+            )
+            evidence_ids.append(artifact.id)
+
+        analyzer = ReferenceAnalyzer(
+            self.model, simulation=self.settings.is_simulation
+        )
+        if self.settings.is_simulation:
+            blueprint, trace = analyzer.analyze(
+                project, frames, source_name=source["original_name"]
+            )
+        else:
+            with self.gpu.qwen():
+                blueprint, trace = analyzer.analyze(
+                    project, frames, source_name=source["original_name"]
+                )
+        trace["evidence_artifact_ids"] = evidence_ids
+        analysis = self.db.save_reference_analysis(
+            project_id,
+            source["id"],
+            blueprint.model_dump(mode="json"),
+            trace,
+        )
+        self.db.transition_project(project_id, ProjectState.REFERENCE_REVIEW)
+        return analysis
+
+    def approve_reference_analysis(
+        self, project_id: str, request: ApprovalRequest
+    ) -> Storyboard | Project:
+        project = self.db.get_project(project_id)
+        if project.state != ProjectState.REFERENCE_REVIEW:
+            raise ValueError("project is not awaiting reference blueprint approval")
+        analysis = self.db.get_reference_analysis(project_id)
+        if analysis is None:
+            raise ValueError("reference blueprint is missing")
+        self.db.record_approval(
+            project_id, "reference_blueprint", request.approved, request.notes
+        )
+        if not request.approved:
+            return self.db.transition_project(
+                project_id, ProjectState.REFERENCE_ANALYSIS, request.notes
+            )
+        blueprint = ReferenceBlueprint.model_validate(analysis["blueprint"])
+        storyboard = blueprint.as_storyboard()
+        style = blueprint.style
+        visual_style = "; ".join(filter(None, [
+            style.medium, style.visual_language,
+            f"palette: {', '.join(style.palette)}" if style.palette else "",
+            f"lighting: {style.lighting}" if style.lighting else "",
+            f"materials: {style.materials}" if style.materials else "",
+        ]))
+        self.db.update_project(
+            project_id, ProjectUpdate(visual_style=visual_style[:500])
+        )
+        bible = {
+            **storyboard.character_bible,
+            "_generation_plan": {
+                "requires_character_sheet": storyboard.requires_character_sheet,
+                "character_sheet_prompt": storyboard.character_sheet_prompt,
+                "visual_style": visual_style[:500],
+                "reference_analysis_id": analysis["id"],
+            },
+            "_prompt_audit": {"reference_analysis": analysis["trace"]},
+        }
+        self.db.replace_storyboard(
+            project_id, storyboard.scenes, bible, storyboard.canonical_assets
+        )
+        self.db.approve_reference_analysis(analysis["id"])
+        self.db.transition_project(project_id, ProjectState.STORYBOARD_REVIEW)
+        return storyboard
+
 
     def plan_project(self, project_id: str, request: PlanRequest | None = None) -> Storyboard:
         project = self.db.get_project(project_id)
+        if project.source_mode == SourceMode.REFERENCE:
+            raise ValueError("analyze and approve the reference blueprint instead of text planning")
         research_context = ""
         if project.state == ProjectState.DRAFT and project.research_required:
             project = self.db.transition_project(project_id, ProjectState.RESEARCH_NEEDED)
@@ -283,6 +451,9 @@ class Orchestrator:
         self.db.delete_scene(scene_id)
 
     def retry_project(self, project_id: str) -> Project:
+        project = self.db.get_project(project_id)
+        if project.source_mode == SourceMode.REFERENCE:
+            raise ValueError("reference projects cannot discard their source with legacy restart")
         self.db.reset_project(project_id)
         project_dir = self.settings.projects_dir / project_id
         if project_dir.exists():
@@ -302,11 +473,16 @@ class Orchestrator:
             export.unlink()
 
     def approve_storyboard(self, project_id: str, request: ApprovalRequest) -> list[Job]:
-        if self.db.get_project(project_id).state != ProjectState.STORYBOARD_REVIEW:
+        project = self.db.get_project(project_id)
+        if project.state != ProjectState.STORYBOARD_REVIEW:
             raise ValueError("project is not awaiting storyboard approval")
         self.db.record_approval(project_id, "storyboard", request.approved, request.notes)
         if not request.approved:
-            self.db.transition_project(project_id, ProjectState.PLANNING, request.notes)
+            target = (
+                ProjectState.REFERENCE_REVIEW
+                if project.source_mode == SourceMode.REFERENCE else ProjectState.PLANNING
+            )
+            self.db.transition_project(project_id, target, request.notes)
             return []
         self.db.transition_project(project_id, ProjectState.REFERENCES)
         scenes = self.db.list_scenes(project_id)

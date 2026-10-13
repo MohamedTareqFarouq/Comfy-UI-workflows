@@ -210,6 +210,26 @@ The example workflow mapping files remain tracked.
 
 Audio, narration, captions and music are outside this visual-only MVP.
 
+### Reference remake mode
+
+New projects can start from a 10-30 second uploaded MP4, MOV, WebM, MKV or M4V
+reference instead of a text-only idea. The initial implementation:
+
+1. Stores and hashes the immutable source in managed project storage.
+2. Validates it with FFprobe and derives the project duration.
+3. Extracts eight chronological evidence frames.
+4. Uses Qwen to produce a typed visual-style, motion-style, canonical-asset and
+   scene blueprint. Simulation mode produces the same deterministic contract.
+5. Presents the source, evidence and blueprint for approval.
+6. Converts the approved blueprint into the existing storyboard and canonical
+   asset pipeline.
+
+This first slice accepts local file uploads. Direct remote video URLs, shot-aware
+sampling, editable entity consolidation and source-frame-conditioned canonical
+asset generation remain follow-up work. The Wan stage still interprets textual
+motion descriptions; reference mode is a generative remake, not an exact clone.
+
+
 ## Backup and migration
 
 Stop the service before restoring or moving live data.

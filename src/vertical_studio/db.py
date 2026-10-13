@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS projects (
   duration_seconds INTEGER NOT NULL,
   visual_style TEXT NOT NULL,
   research_required INTEGER NOT NULL,
+  source_mode TEXT NOT NULL DEFAULT 'description',
   state TEXT NOT NULL,
   resume_state TEXT,
   execution_mode TEXT NOT NULL,
@@ -61,6 +62,30 @@ CREATE TABLE IF NOT EXISTS research_sources (
   extract TEXT NOT NULL,
   claims_json TEXT NOT NULL,
   retrieved_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS reference_sources (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  origin TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  source_url TEXT,
+  path TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  metadata_json TEXT NOT NULL,
+  artifact_id TEXT REFERENCES artifacts(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS reference_analyses (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_id TEXT NOT NULL REFERENCES reference_sources(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  blueprint_json TEXT NOT NULL,
+  trace_json TEXT NOT NULL,
+  approved INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(project_id, version)
 );
 CREATE TABLE IF NOT EXISTS scenes (
   id TEXT PRIMARY KEY,
@@ -199,6 +224,17 @@ class Database:
     def initialize(self) -> None:
         with self.connect() as connection:
             connection.executescript(SCHEMA)
+            self._migrate(connection)
+
+    @staticmethod
+    def _migrate(connection: sqlite3.Connection) -> None:
+        columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(projects)")
+        }
+        if "source_mode" not in columns:
+            connection.execute(
+                "ALTER TABLE projects ADD COLUMN source_mode TEXT NOT NULL DEFAULT 'description'"
+            )
 
     def add_event(
         self,
@@ -219,7 +255,7 @@ class Database:
         title = request.title or request.idea.strip().split(".")[0][:80]
         with self.transaction() as connection:
             connection.execute(
-                "INSERT INTO projects VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO projects(id,title,idea,duration_seconds,visual_style,research_required,source_mode,state,resume_state,execution_mode,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     project_id,
                     title,
@@ -227,6 +263,7 @@ class Database:
                     request.duration_seconds,
                     request.visual_style,
                     int(request.research_required),
+                    request.source_mode,
                     ProjectState.DRAFT,
                     None,
                     mode,
@@ -249,6 +286,113 @@ class Database:
                 )
             self.add_event(connection, project_id, "project.created", request.model_dump())
         return self.get_project(project_id)
+
+    def add_reference_source(
+        self,
+        project_id: str,
+        *,
+        origin: str,
+        original_name: str,
+        path: Path,
+        sha256: str,
+        metadata: dict[str, Any],
+        artifact_id: str,
+        source_url: str | None = None,
+    ) -> dict[str, Any]:
+        source_id = str(uuid.uuid4())
+        now = utc_now()
+        with self.transaction() as connection:
+            connection.execute(
+                "DELETE FROM reference_sources WHERE project_id=?",
+                (project_id,),
+            )
+            connection.execute(
+                "INSERT INTO reference_sources(id,project_id,origin,original_name,source_url,path,sha256,metadata_json,artifact_id,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (
+                    source_id, project_id, origin, original_name, source_url,
+                    str(path), sha256, json.dumps(metadata), artifact_id, now,
+                ),
+            )
+            self.add_event(
+                connection, project_id, "reference.source_added",
+                {"source_id": source_id, "origin": origin, "original_name": original_name},
+            )
+        source = self.get_reference_source(project_id)
+        assert source is not None
+        return source
+
+    def get_reference_source(self, project_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM reference_sources WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
+                (project_id,),
+            ).fetchone()
+        if not row:
+            return None
+        value = dict(row)
+        value["metadata"] = json.loads(value.pop("metadata_json"))
+        return value
+
+    def save_reference_analysis(
+        self,
+        project_id: str,
+        source_id: str,
+        blueprint: dict[str, Any],
+        trace: dict[str, Any],
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.transaction() as connection:
+            version = connection.execute(
+                "SELECT COALESCE(MAX(version),0)+1 FROM reference_analyses WHERE project_id=?",
+                (project_id,),
+            ).fetchone()[0]
+            analysis_id = str(uuid.uuid4())
+            connection.execute(
+                "INSERT INTO reference_analyses(id,project_id,source_id,version,blueprint_json,trace_json,approved,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    analysis_id, project_id, source_id, version,
+                    json.dumps(blueprint), json.dumps(trace), 0, now, now,
+                ),
+            )
+            self.add_event(
+                connection, project_id, "reference.analysis_saved",
+                {"analysis_id": analysis_id, "version": version},
+            )
+        analysis = self.get_reference_analysis(project_id)
+        assert analysis is not None
+        return analysis
+
+    def get_reference_analysis(self, project_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM reference_analyses WHERE project_id=? ORDER BY version DESC LIMIT 1",
+                (project_id,),
+            ).fetchone()
+        if not row:
+            return None
+        value = dict(row)
+        value["blueprint"] = json.loads(value.pop("blueprint_json"))
+        value["trace"] = json.loads(value.pop("trace_json"))
+        value["approved"] = bool(value["approved"])
+        return value
+
+    def approve_reference_analysis(self, analysis_id: str) -> None:
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT project_id FROM reference_analyses WHERE id=?", (analysis_id,)
+            ).fetchone()
+            if not row:
+                raise KeyError(f"reference analysis {analysis_id} not found")
+            connection.execute(
+                "UPDATE reference_analyses SET approved=1,updated_at=? WHERE id=?",
+                (utc_now(), analysis_id),
+            )
+            self.add_event(
+                connection, row["project_id"], "reference.analysis_approved",
+                {"analysis_id": analysis_id},
+            )
 
     def get_project(self, project_id: str) -> Project:
         with self.connect() as connection:

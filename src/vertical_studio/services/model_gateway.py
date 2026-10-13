@@ -245,6 +245,7 @@ class ModelGateway:
         system: str,
         prompt: str,
         image_urls: list[str],
+        max_tokens: int = 2048,
     ) -> T:
         self.ensure_available()
         schema = output_type.model_json_schema()
@@ -267,7 +268,7 @@ class ModelGateway:
                 {"role": "user", "content": content},
             ],
             "temperature": 0.1,
-            "max_tokens": 2048,
+            "max_tokens": max_tokens,
             "response_format": {"type": "json_schema", "schema": schema},
         }
         try:

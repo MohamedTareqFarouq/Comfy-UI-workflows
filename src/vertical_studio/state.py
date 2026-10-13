@@ -4,10 +4,12 @@ from .schemas import ProjectState, SceneState
 
 
 PROJECT_TRANSITIONS: dict[ProjectState, set[ProjectState]] = {
-    ProjectState.DRAFT: {ProjectState.RESEARCH_NEEDED, ProjectState.PLANNING, ProjectState.PAUSED},
+    ProjectState.DRAFT: {ProjectState.REFERENCE_ANALYSIS, ProjectState.RESEARCH_NEEDED, ProjectState.PLANNING, ProjectState.PAUSED},
+    ProjectState.REFERENCE_ANALYSIS: {ProjectState.REFERENCE_REVIEW, ProjectState.FAILED, ProjectState.PAUSED},
+    ProjectState.REFERENCE_REVIEW: {ProjectState.STORYBOARD_REVIEW, ProjectState.REFERENCE_ANALYSIS, ProjectState.PAUSED},
     ProjectState.RESEARCH_NEEDED: {ProjectState.PLANNING, ProjectState.FAILED, ProjectState.PAUSED},
     ProjectState.PLANNING: {ProjectState.STORYBOARD_REVIEW, ProjectState.FAILED, ProjectState.PAUSED},
-    ProjectState.STORYBOARD_REVIEW: {ProjectState.REFERENCES, ProjectState.PLANNING, ProjectState.PAUSED},
+    ProjectState.STORYBOARD_REVIEW: {ProjectState.REFERENCES, ProjectState.PLANNING, ProjectState.REFERENCE_REVIEW, ProjectState.PAUSED},
     ProjectState.REFERENCES: {ProjectState.CONTACT_SHEET_REVIEW, ProjectState.FAILED, ProjectState.PAUSED},
     ProjectState.CONTACT_SHEET_REVIEW: {ProjectState.SCENES, ProjectState.REFERENCES, ProjectState.PAUSED},
     ProjectState.SCENES: {ProjectState.FINAL_REVIEW, ProjectState.FAILED, ProjectState.PAUSED},
@@ -17,6 +19,8 @@ PROJECT_TRANSITIONS: dict[ProjectState, set[ProjectState]] = {
     ProjectState.FAILED: {ProjectState.PAUSED, ProjectState.PLANNING, ProjectState.SCENES},
     ProjectState.PAUSED: {
         ProjectState.DRAFT,
+        ProjectState.REFERENCE_ANALYSIS,
+        ProjectState.REFERENCE_REVIEW,
         ProjectState.RESEARCH_NEEDED,
         ProjectState.PLANNING,
         ProjectState.STORYBOARD_REVIEW,

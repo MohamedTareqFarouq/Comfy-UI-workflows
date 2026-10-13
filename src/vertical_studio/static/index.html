@@ -18,6 +18,11 @@
 </section></main>
 <dialog id="create-dialog"><form id="create-form">
 <h2>New vertical video</h2>
+<label>Starting point<select name="source_mode" id="source-mode">
+<option value="description">Describe and start from scratch</option>
+<option value="reference">Start from a reference video</option>
+</select></label>
+<label id="reference-file-field" hidden>Reference video<input type="file" name="reference_file" accept="video/mp4,video/quicktime,video/webm,video/x-matroska"></label>
 <label>Title<input name="title" placeholder="Fogbound arrival"></label>
 <label>Idea<textarea name="idea" required minlength="3" placeholder="Describe the story or concept..."></textarea></label>
 <div class="row"><label>Duration<select name="duration_seconds"><option>10</option><option selected>15</option><option>20</option><option>30</option></select></label>
@@ -40,5 +45,5 @@
 <div id="retry-rationale" class="notice" hidden></div>
 <div class="actions"><button type="button" data-retry-close>Cancel</button><button type="button" id="revise-retry-prompts">Ask Qwen to revise</button><button type="submit" class="primary" disabled>Accept & regenerate</button></div>
 </form></dialog>
-<div id="toast"></div><script src="/app.js?v=guided-retry-4" defer></script>
+<div id="toast"></div><script src="/app.js?v=reference-remake-1" defer></script>
 </body></html>
