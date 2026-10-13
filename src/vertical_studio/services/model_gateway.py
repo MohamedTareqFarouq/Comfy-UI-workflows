@@ -160,7 +160,7 @@ class ModelGateway:
                     json=payload,
                     timeout=self.timeout,
                 )
-                response.raise_for_status()
+                self._raise_for_status_with_detail(response)
                 last_content = response.json()["choices"][0]["message"]["content"]
                 parsed = self._parse_structured(output_type, last_content)
                 self.last_trace = {
@@ -238,6 +238,17 @@ class ModelGateway:
             json.dumps({"error": str(error), "content": content}, indent=2)
         )
 
+    @staticmethod
+    def _raise_for_status_with_detail(response: httpx.Response) -> None:
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = response.text.strip()
+            message = f"Qwen request failed with HTTP {response.status_code}"
+            if detail:
+                message += f": {detail[:2000]}"
+            raise ModelUnavailable(message) from exc
+
     def analyze_images(
         self,
         output_type: type[T],
@@ -275,7 +286,7 @@ class ModelGateway:
             response = httpx.post(
                 f"{self.base_url}/v1/chat/completions", json=payload, timeout=self.timeout
             )
-            response.raise_for_status()
+            self._raise_for_status_with_detail(response)
             value = response.json()["choices"][0]["message"]["content"]
             return self._parse_structured(output_type, value)
         except (httpx.HTTPError, KeyError, ValueError) as exc:

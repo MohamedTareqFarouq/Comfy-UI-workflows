@@ -97,6 +97,11 @@ Normal Linux/WSL laptop:
 ./start.sh --real --managed-qwen
 ```
 
+The Lightning launcher uses Qwen3-VL-8B-Instruct Q4_K_M with a 32,768-token
+runtime context. This gives reference-video analysis enough room for eight
+evidence frames, its structured schema and the generated blueprint. Override
+`VVS_QWEN_HF_REPO`, `VVS_QWEN_MODEL` or `VVS_QWEN_CONTEXT_SIZE` when needed.
+
 Use `VVS_PYTHON=/path/to/python` or `VVS_USE_ACTIVE_ENV=1` to override automatic
 runtime selection. `start.sh` also accepts `--managed-qwen`, `--no-managed-qwen`,
 `--real`, and `--simulation` before the normal server arguments.
@@ -130,7 +135,10 @@ The application reads environment variables. Important settings are:
 | `VVS_PORT` | `8765` | Web server port. |
 | `VVS_COMFY_URL` | `http://127.0.0.1:8188` | ComfyUI API endpoint. |
 | `VVS_LLAMA_URL` | `http://127.0.0.1:8080` | llama.cpp Qwen endpoint. |
+| `VVS_QWEN_MODEL` | `Qwen3-VL-4B-Instruct-GGUF` | llama.cpp model alias; Lightning defaults to the 8B Instruct model. |
+| `VVS_QWEN_HF_REPO` | `Qwen/Qwen3-VL-4B-Instruct-GGUF:Q4_K_M` | Hugging Face GGUF source; Lightning defaults to the official 8B Q4_K_M repository. |
 | `VVS_BRAVE_API_KEY` | unset | Optional current/factual research provider. |
+| `VVS_QWEN_CONTEXT_SIZE` | `16384` | Managed Qwen context window; reference-video analysis requires more than 8,192 tokens. |
 
 Example:
 

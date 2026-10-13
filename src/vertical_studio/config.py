@@ -29,7 +29,7 @@ class Settings:
     llama_executable: str = "llama"
     qwen_hf_repo: str = "Qwen/Qwen3-VL-4B-Instruct-GGUF:Q4_K_M"
     qwen_gpu_layers: int = 99
-    qwen_context_size: int = 8192
+    qwen_context_size: int = 16384
     qwen_start_timeout: int = 300
     brave_api_key: str | None = None
 
@@ -74,7 +74,7 @@ def load_settings() -> Settings:
             "VVS_QWEN_HF_REPO", "Qwen/Qwen3-VL-4B-Instruct-GGUF:Q4_K_M"
         ),
         qwen_gpu_layers=int(os.getenv("VVS_QWEN_GPU_LAYERS", "99")),
-        qwen_context_size=int(os.getenv("VVS_QWEN_CONTEXT_SIZE", "8192")),
+        qwen_context_size=int(os.getenv("VVS_QWEN_CONTEXT_SIZE", "16384")),
         qwen_start_timeout=int(os.getenv("VVS_QWEN_START_TIMEOUT", "300")),
         brave_api_key=os.getenv("VVS_BRAVE_API_KEY") or None,
     )
