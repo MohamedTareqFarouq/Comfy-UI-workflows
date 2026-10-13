@@ -6,7 +6,8 @@ const state={
   historyOpen:false,
   poll:null,
   runtime:null,
-  operation:null
+  operation:null,
+  navigation:0
 };
 
 const q=selector=>document.querySelector(selector);
@@ -19,7 +20,9 @@ async function api(path,options={}){
   const response=await fetch(path,{...options,headers});
   if(!response.ok){
     const body=await response.json().catch(()=>({detail:response.statusText}));
-    throw new Error(body.detail||response.statusText);
+    const error=new Error(body.detail||response.statusText);
+    error.status=response.status;
+    throw error;
   }
   return response.status===204?null:response.json();
 }
@@ -172,19 +175,48 @@ async function refreshProjects(){
 }
 
 async function openProject(id){
+  const navigation=++state.navigation;
+  clearInterval(state.poll);
+  state.poll=null;
   state.current=id;
   state.detailSignature=null;
   state.historyOpen=false;
   state.operation=null;
-  await refreshProjects();
-  await refreshDetail();
-  clearInterval(state.poll);
-  state.poll=setInterval(refreshDetail,1800);
+  try{
+    await refreshProjects();
+    if(navigation!==state.navigation||id!==state.current)return;
+    await refreshDetail(id);
+    if(navigation!==state.navigation||id!==state.current)return;
+    state.poll=setInterval(()=>{
+      refreshDetail(id).catch(error=>handleDetailRefreshError(error,id));
+    },1800);
+  }catch(error){
+    handleDetailRefreshError(error,id);
+  }
 }
 
-async function refreshDetail(){
-  if(!state.current)return;
-  const detail=await api(`/api/projects/${state.current}`);
+function handleDetailRefreshError(error,id){
+  if(id!==state.current)return;
+  if(error.status===404){
+    clearInterval(state.poll);
+    state.poll=null;
+    state.current=null;
+    state.detail=null;
+    state.detailSignature=null;
+    q("#project-view").hidden=true;
+    q("#empty").hidden=false;
+    refreshProjects().catch(()=>{});
+    toast("That project no longer exists. Refresh the project list.");
+    return;
+  }
+  state.operation={tone:"error",title:"Connection error",detail:error.message};
+  renderActivityIndicator();
+}
+
+async function refreshDetail(projectId=state.current){
+  if(!projectId||projectId!==state.current)return;
+  const detail=await api(`/api/projects/${projectId}`);
+  if(projectId!==state.current)return;
   const signature=JSON.stringify(detail);
   if(signature===state.detailSignature)return;
   state.detail=detail;
@@ -1069,7 +1101,7 @@ q("#create-form").onsubmit=async event=>{
     state.runtime=status;
     q("#runtime").textContent=`${status.mode.toUpperCase()} / ${status.platform.toUpperCase()}${status.managed_qwen?" / AUTO GPU":""}`;
     await refreshProjects();
-    if(state.projects[0])openProject(state.projects[0].id);
+    if(state.projects[0])await openProject(state.projects[0].id);
   }catch(error){
     q("#runtime").textContent="Backend unavailable";
     toast(error.message);

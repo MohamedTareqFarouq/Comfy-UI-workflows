@@ -23,6 +23,9 @@ def test_pwa_and_project_api_contract(components) -> None:
         assert "Uploading reference video" in script.text
         assert "uploadReference" in script.text
         assert 'idea.required=!reference' in script.text
+        assert "projectId!==state.current" in script.text
+        assert "handleDetailRefreshError" in script.text
+        assert "error.status=response.status" in script.text
         assert observability.status_code == 200
         assert "Prompt and decision audit" in observability.text
         audit_script = client.get("/observability.js")
