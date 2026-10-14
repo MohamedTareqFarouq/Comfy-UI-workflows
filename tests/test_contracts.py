@@ -101,12 +101,17 @@ def test_reference_blueprint_normalizes_model_continuity_flags() -> None:
             "continuity_group": group,
             "starts_new_continuity": starts,
             "transition_from_previous": transition,
+            "reference_keys": ["character_001"],
+            "characters_present": ["character_001"],
         }
 
     blueprint = ReferenceBlueprint(
         summary="Recovered reference",
         style={"medium": "animation", "visual_language": "clean shapes"},
         motion={"animation_style": "smooth movement"},
+        canonical_assets=[
+            {"key": "player", "role": "character", "label": "Player", "prompt": "Player identity"},
+        ],
         scenes=[
             scene("court", False, "continuous"),
             scene("court", True, "new_sequence"),
@@ -116,6 +121,8 @@ def test_reference_blueprint_normalizes_model_continuity_flags() -> None:
     storyboard = blueprint.as_storyboard()
     assert [item.starts_new_continuity for item in storyboard.scenes] == [True, False, True]
     assert [item.transition_from_previous for item in storyboard.scenes] == ["new_sequence", "continuous", "new_sequence"]
+    assert all(item.characters_present == ["player"] for item in storyboard.scenes)
+    assert all(item.reference_keys == ["player"] for item in storyboard.scenes)
 
 
 def test_keyframes_use_different_environment_references_per_endpoint(

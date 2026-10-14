@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any, Literal
@@ -211,6 +212,108 @@ class ReferenceBlueprint(BaseModel):
             seen.add(group)
             previous = group
         self.scenes = normalized
+        return self
+
+
+    @model_validator(mode="after")
+    def reconcile_canonical_asset_keys(self) -> "ReferenceBlueprint":
+        assets = list(self.canonical_assets)
+        aliases: dict[str, str] = {}
+
+        def token(value: str) -> str:
+            return re.sub(r"[^a-z0-9]+", "", value.casefold())
+
+        def resolve(key: str | None, role: str) -> str | None:
+            if not key:
+                return None
+            if key in aliases:
+                return aliases[key]
+            existing = next((asset for asset in assets if asset.key == key), None)
+            if existing is not None and existing.role == role:
+                return key
+            candidates = [asset for asset in assets if asset.role == role]
+            normalized = token(key)
+            matches = [
+                asset for asset in candidates
+                if normalized in {token(asset.key), token(asset.label)}
+            ]
+            if len(matches) == 1:
+                aliases[key] = matches[0].key
+                return matches[0].key
+            if len(candidates) == 1:
+                aliases[key] = candidates[0].key
+                return candidates[0].key
+            if len(assets) >= 16:
+                return candidates[0].key if candidates else None
+
+            safe_key = re.sub(r"[^a-z0-9_-]+", "_", key.casefold()).strip("_-")
+            safe_key = (safe_key or f"{role}_{len(assets) + 1:03d}")[:80]
+            base = safe_key[:72]
+            suffix = 2
+            while any(asset.key == safe_key for asset in assets):
+                safe_key = f"{base}_{suffix}"
+                suffix += 1
+            label = key.replace("_", " ").replace("-", " ").title()[:160]
+            directive = {
+                "character": "one full-body character on a plain background",
+                "environment": "one clean empty establishing view",
+                "prop": "one isolated prop on a plain background",
+            }[role]
+            asset = CanonicalAssetSpec(
+                key=safe_key,
+                role=role,
+                label=label or role.title(),
+                prompt=(
+                    f"{self.style.medium}; {self.style.visual_language}. {directive}; "
+                    f"reconstruct {label or key} faithfully from the source evidence."
+                ),
+                description=f"Source-derived {role} referenced by the analyzed scenes as {key}.",
+            )
+            assets.append(asset)
+            aliases[key] = asset.key
+            return asset.key
+
+        repaired: list[SceneSpec] = []
+        for scene in self.scenes:
+            characters = [
+                value for key in scene.characters_present
+                if (value := resolve(key, "character"))
+            ]
+            props = [
+                value for key in scene.important_props
+                if (value := resolve(key, "prop"))
+            ]
+            environment = resolve(scene.environment_key, "environment")
+            opening = resolve(
+                scene.opening_environment_key or scene.environment_key,
+                "environment",
+            )
+            closing = resolve(
+                scene.closing_environment_key
+                or scene.opening_environment_key
+                or scene.environment_key,
+                "environment",
+            )
+            references = []
+            for key in scene.reference_keys:
+                resolved = aliases.get(key)
+                if resolved is None and any(asset.key == key for asset in assets):
+                    resolved = key
+                if resolved and resolved not in references:
+                    references.append(resolved)
+            for key in [*characters, *props, opening, closing]:
+                if key and key not in references:
+                    references.append(key)
+            repaired.append(scene.model_copy(update={
+                "reference_keys": references,
+                "characters_present": list(dict.fromkeys(characters)),
+                "important_props": list(dict.fromkeys(props)),
+                "environment_key": environment or opening,
+                "opening_environment_key": opening,
+                "closing_environment_key": closing,
+            }))
+        self.canonical_assets = assets
+        self.scenes = repaired
         return self
 
     def as_storyboard(self) -> "Storyboard":
