@@ -51,7 +51,10 @@ class ReferenceAnalyzer:
                 "duration. The first scene starts a continuity group. Start a new group for a "
                 "cut, location change, time jump, or radical composition change. Use only known "
                 "canonical asset keys in scene references. Preserve source evidence rather than "
-                "inventing unsupported details. Return JSON only."
+                "inventing unsupported details. Frames are numbered in chronological order starting "
+                "at 1. For every canonical asset, set evidence_frame_indices to the 1-4 frame numbers "
+                "that most clearly show that specific asset. Never cite a frame that does not visibly "
+                "support the asset. Return JSON only."
             ),
             prompt=(
                 f"Source: {source_name}. Target duration: {project.duration_seconds} seconds. "
@@ -102,6 +105,12 @@ class ReferenceAnalyzer:
             camera_language="Stable cinematic framing with restrained pushes and pans.",
             transition_language="Direct cuts between distinct story beats.",
         )
+        evidence_indices = list(dict.fromkeys([
+            1,
+            max(1, len(frames) // 3),
+            max(1, (2 * len(frames)) // 3),
+            len(frames),
+        ]))[:4]
         assets = [
             CanonicalAssetSpec(
                 key="protagonist",
@@ -112,6 +121,7 @@ class ReferenceAnalyzer:
                     "identity reference matching the source protagonist, consistent face, hair, "
                     "wardrobe and proportions, plain background, one person only."
                 ),
+                evidence_frame_indices=evidence_indices,
                 description="The recurring main character reconstructed from source evidence.",
             ),
             CanonicalAssetSpec(
@@ -123,6 +133,7 @@ class ReferenceAnalyzer:
                     "the recurring source environment, preserving architecture, palette and lighting."
                 ),
                 description="The recurring source environment and lighting anchor.",
+                evidence_frame_indices=evidence_indices,
             ),
         ]
         scenes = [

@@ -152,6 +152,9 @@ def test_reference_video_becomes_reviewable_storyboard(
         assert blueprint["style"]["medium"]
         assert blueprint["motion"]["animation_style"]
         assert len(blueprint["canonical_assets"]) == 2
+        assert all(
+            asset["evidence_frame_indices"] for asset in blueprint["canonical_assets"]
+        )
         assert len(blueprint["scenes"]) >= 3
         assert detail["reference_source"]["artifact_id"]
         evidence = [
@@ -170,3 +173,18 @@ def test_reference_video_becomes_reviewable_storyboard(
         assert detail["reference_analysis"]["approved"] is True
         assert detail["canonical_assets"]
         assert detail["scenes"]
+
+        queued = client.post(
+            f"/api/projects/{project_id}/storyboard-approval",
+            json={"approved": True, "notes": ""},
+        )
+        assert queued.status_code == 200
+        evidence_ids = {artifact["id"] for artifact in evidence}
+        jobs = queued.json()
+        assert jobs
+        assert all(1 <= len(job["payload"]["reference_frames"]) <= 4 for job in jobs)
+        assert all(
+            {frame["artifact_id"] for frame in job["payload"]["reference_frames"]}
+            <= evidence_ids
+            for job in jobs
+        )

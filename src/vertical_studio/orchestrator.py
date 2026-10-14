@@ -494,6 +494,43 @@ class Orchestrator:
         )
         if active:
             return active
+        reference_frames: list[dict[str, Any]] = []
+        if project.source_mode == SourceMode.REFERENCE:
+            analysis = self.db.get_reference_analysis(project.id)
+            if analysis and analysis["approved"]:
+                evidence_ids = analysis["trace"].get("evidence_artifact_ids", [])
+                asset_blueprint = next(
+                    (
+                        item for item in analysis["blueprint"].get("canonical_assets", [])
+                        if item.get("key") == asset.key
+                    ),
+                    {},
+                )
+                requested = list(dict.fromkeys(
+                    asset_blueprint.get("evidence_frame_indices", [])
+                ))[:4]
+                selected = [
+                    index for index in requested
+                    if isinstance(index, int) and 1 <= index <= len(evidence_ids)
+                ]
+                if not selected and evidence_ids:
+                    count = min(4, len(evidence_ids))
+                    selected = (
+                        [1] if count == 1 else [
+                            round(offset * (len(evidence_ids) - 1) / (count - 1)) + 1
+                            for offset in range(count)
+                        ]
+                    )
+                for index in selected:
+                    artifact = self.db.get_artifact(evidence_ids[index - 1])
+                    reference_frames.append({
+                        "artifact_id": artifact.id,
+                        "key": f"evidence_frame_{index}",
+                        "role": "source_evidence",
+                        "label": f"source evidence frame {index}",
+                        "path": artifact.path,
+                    })
+
         payload = {
             "canonical_asset_id": asset.id,
             "asset_key": asset.key,
@@ -505,6 +542,8 @@ class Orchestrator:
             "width": 720,
             "height": 1280,
             "template": "flux_t2i_api",
+            "multiref_template_prefix": "flux_klein_multiref",
+            "reference_frames": reference_frames,
             "generation_round": len(prior) + 1,
         }
         return self.db.create_job(

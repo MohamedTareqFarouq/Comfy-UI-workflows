@@ -176,6 +176,48 @@ def test_keyframes_use_different_environment_references_per_endpoint(
     assert calls[0] == ["leo", "kitchen"]
     assert calls[1] == ["opening_frame", "leo", "dining_room"]
 
+def test_reference_asset_uses_source_evidence(
+    monkeypatch, tmp_path: Path
+) -> None:
+    client = ComfyClient("http://127.0.0.1:1", tmp_path)
+    captured: dict = {}
+
+    def fake_multiref(
+        output: Path, _payload: dict, *, prompt: str, seed: int,
+        references: list[dict], output_prefix: str,
+    ) -> GenerationResult:
+        captured.update({
+            "prompt": prompt,
+            "seed": seed,
+            "references": references,
+            "output_prefix": output_prefix,
+        })
+        output.mkdir(parents=True, exist_ok=True)
+        path = output / "asset.png"
+        path.write_bytes(b"asset")
+        return GenerationResult(files=[path], metadata={"references": references})
+
+    monkeypatch.setattr(client, "_generate_multiref_image", fake_multiref)
+    result = client.generate_reference_asset(
+        tmp_path / "output",
+        {
+            "project_id": "reference-project",
+            "asset_key": "old_man",
+            "asset_role": "character",
+            "prompt": "An elderly man with white hair, glasses, and a black suit",
+            "visual_style": "stylized 3D animation",
+            "seed": 42,
+            "width": 384,
+            "height": 672,
+            "reference_frames": [
+                {"key": "evidence_frame_2", "role": "source_evidence",
+                 "label": "source evidence frame 2", "path": "frame-2.jpg"},
+            ],
+        },
+    )
+    assert captured["references"][0]["path"] == "frame-2.jpg"
+    assert "primary visual truth" in captured["prompt"]
+
 
 def test_real_adapter_rejects_ui_workflow(tmp_path: Path) -> None:
     (tmp_path / "bad.json").write_text(json.dumps({"nodes": []}))

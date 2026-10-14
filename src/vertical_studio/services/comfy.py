@@ -392,13 +392,30 @@ class ComfyClient:
             "prop": "One isolated prop only, no people or hands, clean readable silhouette.",
             "style": "A clean style exemplar with a coherent palette, materials and lighting language.",
         }.get(role, "One clean reusable visual reference.")
-        prompt = f"{self._style_directive(payload)}{payload['prompt']}. {suffix}"
-        result = self._generate_t2i_image(
-            output_dir / "run", payload, prompt=prompt, seed=int(payload["seed"]),
-            output_prefix=(
-                f"{payload.get('project_id', 'project')}-{payload.get('asset_key', role)}"
-            ),
+        references = list(payload.get("reference_frames", []))[:4]
+        visual_lock = (
+            "Use the supplied source evidence images as the primary visual truth for identity, "
+            "shape, wardrobe, architecture, palette, materials, and lighting. Extract only the "
+            "requested asset; do not merge unrelated people, objects, or locations from the images. "
+            f"{self._reference_directive(references)}"
+            if references else ""
         )
+        prompt = (
+            f"{self._style_directive(payload)}{visual_lock}{payload['prompt']}. {suffix}"
+        )
+        output_prefix = (
+            f"{payload.get('project_id', 'project')}-{payload.get('asset_key', role)}"
+        )
+        if references:
+            result = self._generate_multiref_image(
+                output_dir / "run", payload, prompt=prompt, seed=int(payload["seed"]),
+                references=references, output_prefix=output_prefix,
+            )
+        else:
+            result = self._generate_t2i_image(
+                output_dir / "run", payload, prompt=prompt, seed=int(payload["seed"]),
+                output_prefix=output_prefix,
+            )
         target = self._move_first(
             result, output_dir / f"canonical-{payload.get('asset_key', role)}"
         )

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def utc_now() -> str:
@@ -148,6 +148,14 @@ class CanonicalAssetSpec(BaseModel):
     label: str = Field(min_length=1, max_length=160)
     prompt: str = Field(min_length=1, max_length=2000)
     description: str = Field(default="", max_length=1200)
+    evidence_frame_indices: list[int] = Field(default_factory=list, max_length=4)
+
+    @field_validator("evidence_frame_indices")
+    @classmethod
+    def validate_evidence_frame_indices(cls, value: list[int]) -> list[int]:
+        if any(index < 1 or index > 32 for index in value):
+            raise ValueError("evidence frame indices must be between 1 and 32")
+        return list(dict.fromkeys(value))
 
 
 class ReferenceStyleProfile(BaseModel):
