@@ -214,7 +214,6 @@ class ReferenceBlueprint(BaseModel):
         self.scenes = normalized
         return self
 
-
     @model_validator(mode="after")
     def reconcile_canonical_asset_keys(self) -> "ReferenceBlueprint":
         assets = list(self.canonical_assets)
@@ -314,6 +313,61 @@ class ReferenceBlueprint(BaseModel):
             }))
         self.canonical_assets = assets
         self.scenes = repaired
+        return self
+
+    @model_validator(mode="after")
+    def split_environment_discontinuities(self) -> "ReferenceBlueprint":
+        normalized: list[SceneSpec] = []
+        used: set[str] = set()
+        previous_source_group: str | None = None
+        active_group: str | None = None
+        previous_closing: str | None = None
+
+        def unique_group(value: str, position: int) -> str:
+            candidate = value
+            if candidate not in used:
+                return candidate
+            base = value[:68]
+            suffix = position
+            candidate = f"{base}-segment-{suffix}"
+            while candidate in used:
+                suffix += 1
+                candidate = f"{base}-segment-{suffix}"
+            return candidate
+
+        for index, scene in enumerate(self.scenes, 1):
+            source_group = scene.continuity_group
+            opening = scene.opening_environment_key or scene.environment_key
+            closing = scene.closing_environment_key or opening
+            if index == 1 or source_group != previous_source_group:
+                group = unique_group(source_group, index)
+                starts_new = True
+            else:
+                group = active_group or source_group
+                starts_new = False
+            if (
+                not starts_new
+                and previous_closing
+                and opening
+                and opening != previous_closing
+            ):
+                group = unique_group(f"{source_group[:68]}-environment", index)
+                starts_new = True
+            transition = scene.transition_from_previous
+            if index == 1 or (starts_new and transition == "continuous"):
+                transition = "new_sequence"
+            elif not starts_new and transition == "new_sequence":
+                transition = "continuous"
+            normalized.append(scene.model_copy(update={
+                "continuity_group": group,
+                "starts_new_continuity": starts_new,
+                "transition_from_previous": transition,
+            }))
+            used.add(group)
+            previous_source_group = source_group
+            active_group = group
+            previous_closing = closing
+        self.scenes = normalized
         return self
 
     def as_storyboard(self) -> "Storyboard":

@@ -120,6 +120,8 @@ class Worker:
             ) from exc
         if self.db.get_job(job.id).state == JobState.CANCELLED:
             return
+        # Persistence boundary: never save a blueprint that production cannot use.
+        blueprint.as_storyboard()
         evidence_ids = []
         for index, frame in enumerate(frames, 1):
             artifact = self.db.add_artifact(
