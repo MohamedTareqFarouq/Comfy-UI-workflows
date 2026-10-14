@@ -521,16 +521,22 @@ function renderDetail(){
   }).join("");
 
   const blueprint=reference_analysis?.blueprint;
-  const evidenceFrames=artifacts.filter(
-    artifact=>artifact.metadata?.role==="reference_evidence"
-  );
+  const evidenceIds=reference_analysis?.trace?.evidence_artifact_ids;
+  const evidenceFrames=Array.isArray(evidenceIds)
+    ?evidenceIds.map(id=>artifacts.find(artifact=>artifact.id===id)).filter(Boolean)
+    :artifacts.filter(artifact=>artifact.metadata?.role==="reference_evidence");
   const referenceHtml=project.source_mode==="reference"?`
     <section class="canonical-panel">
       <div class="section-title"><div><span class="eyebrow">REFERENCE BLUEPRINT</span>
       <h2>${blueprint?esc(blueprint.summary):"Source video ready for analysis"}</h2></div>
       <span>${reference_analysis?"Version "+reference_analysis.version:"Not analyzed"}</span></div>
-      ${reference_source?.artifact_id?`<div class="media"><video controls preload="metadata"
-        src="/api/artifacts/${reference_source.artifact_id}/content"></video></div>`:""}
+      ${reference_source?.artifact_id?`<div class="reference-source">
+        <div class="media reference-source-media"><video controls preload="metadata"
+          src="/api/artifacts/${reference_source.artifact_id}/content"
+          aria-label="Uploaded reference video"></video></div>
+        <div class="reference-source-copy"><b>Source video</b>
+          <span>Uploaded footage used for this analysis</span></div>
+      </div>`:""}
       ${blueprint?`
         <div class="history-columns">
           <section><h3>Visual style</h3><b>${esc(blueprint.style.medium)}</b>
@@ -543,9 +549,14 @@ function renderDetail(){
           <p>${blueprint.canonical_assets.length} canonical assets · ${blueprint.scenes.length} scenes</p>
           <small>${esc((blueprint.ambiguities||[]).join(" · ")||"No unresolved ambiguities")}</small></section>
         </div>
-        <div class="media-grid">${evidenceFrames.map((artifact,index)=>`
-          <div class="media"><img src="/api/artifacts/${artifact.id}/content">
-          <small>Evidence ${index+1}</small></div>`).join("")}</div>
+        ${evidenceFrames.length?`<div class="reference-evidence-heading">
+          <h3>Evidence frames</h3><span>${evidenceFrames.length} sampled frames · open to inspect</span>
+        </div>
+        <div class="reference-evidence-grid">${evidenceFrames.map((artifact,index)=>`
+          <a class="media reference-evidence-frame" href="/api/artifacts/${artifact.id}/content"
+            target="_blank" rel="noopener noreferrer" aria-label="Open evidence frame ${index+1}">
+            <img loading="lazy" src="/api/artifacts/${artifact.id}/content" alt="Evidence frame ${index+1}">
+            <small>Frame ${index+1}</small></a>`).join("")}</div>`:""}
       `:"<p>Upload complete. Run analysis to extract style, characters, environments and movement.</p>"}
     </section>
   `:"";

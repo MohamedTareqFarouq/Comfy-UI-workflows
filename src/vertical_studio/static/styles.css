@@ -16,3 +16,16 @@ button.danger{border-color:#6f2b38;color:var(--danger)}button.danger:hover{backg
 
 .job-lifecycle{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:12px 0;padding:10px;border:1px solid var(--line);border-radius:10px;background:#0c1017}.job-step{display:grid;justify-items:center;gap:4px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.04em}.job-step i{width:10px;height:10px;border-radius:50%;background:#394150}.job-step.complete{color:var(--ok)}.job-step.complete i{background:var(--ok)}.job-step.current{color:var(--accent)}.job-step.current i{background:var(--accent);animation:activity-pulse 1.2s ease-in-out infinite}.job-step.failed{color:var(--danger)}.job-step.failed i{background:var(--danger)}.job-lifecycle small{grid-column:1/-1;color:var(--muted);text-align:right}
 .create-status{margin-bottom:0}.create-status[data-tone="working"]{border-color:var(--accent)}.create-status[data-tone="error"]{border-color:var(--danger);color:#ffd6d6}
+
+.reference-source{display:flex;align-items:flex-start;gap:16px;margin:12px 0 18px}
+.reference-source-media{width:clamp(140px,18vw,200px);flex:none;aspect-ratio:9/16}
+.reference-source-media video{object-fit:contain}
+.reference-source-copy{display:grid;gap:4px;padding-top:4px}
+.reference-source-copy span{color:var(--muted);font-size:12px}
+.reference-evidence-heading{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:16px 0 9px}
+.reference-evidence-heading h3{margin:0}
+.reference-evidence-heading span{color:var(--muted);font-size:12px}
+.reference-evidence-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,112px));gap:10px}
+.reference-evidence-frame{display:block;width:100%;text-decoration:none;color:var(--text)}
+.reference-evidence-frame:hover,.reference-evidence-frame:focus-visible{border-color:var(--accent);outline:2px solid var(--accent);outline-offset:2px}
+@media(max-width:500px){.reference-source-media{width:140px}.reference-evidence-grid{grid-template-columns:repeat(auto-fill,minmax(72px,1fr))}}
