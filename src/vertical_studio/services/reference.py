@@ -54,7 +54,9 @@ class ReferenceAnalyzer:
                 "inventing unsupported details. Frames are numbered in chronological order starting "
                 "at 1. For every canonical asset, set evidence_frame_indices to the 1-4 frame numbers "
                 "that most clearly show that specific asset. Never cite a frame that does not visibly "
-                "support the asset. Return JSON only."
+                "support the asset. Keep every non-prompt string under 25 words and every canonical "
+                "asset prompt under 70 words. Do not repeat facts across fields or add redundant list "
+                "items. Return one complete JSON object and always close every array and object."
             ),
             prompt=(
                 f"Source: {source_name}. Target duration: {project.duration_seconds} seconds. "
@@ -63,7 +65,7 @@ class ReferenceAnalyzer:
                 "environments, props, compositions, actions, camera language and continuity."
             ),
             image_urls=[self._data_url(path) for path in frames],
-            max_tokens=4096,
+            max_tokens=6144,
         )
         return blueprint, {
             "model": self.model.model,

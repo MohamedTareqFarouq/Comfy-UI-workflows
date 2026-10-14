@@ -6,10 +6,11 @@ from pathlib import Path
 import pytest
 
 from vertical_studio.orchestrator import Orchestrator
-from vertical_studio.schemas import ProjectState, ReferenceBlueprint, SceneState, Storyboard, VideoRetryPromptProposal, VisualReview
+from vertical_studio.schemas import ExecutionMode, Project, ProjectState, ReferenceBlueprint, SceneState, SourceMode, Storyboard, VideoRetryPromptProposal, VisualReview
 from vertical_studio.services.comfy import ComfyClient, GenerationError, GenerationResult
 from vertical_studio.services.model_gateway import ModelGateway
 from vertical_studio.services.mock_comfy import MockComfyClient
+from vertical_studio.services.reference import ReferenceAnalyzer
 from vertical_studio.state import InvalidTransition, validate_project_transition, validate_scene_transition
 
 
@@ -429,6 +430,47 @@ def test_video_retry_schema_excludes_irrelevant_keyframe_fields() -> None:
         "stage", "video_prompt", "negative_prompt", "rationale"
     }
     assert properties["negative_prompt"]["maxLength"] == 1800
+
+
+def test_reference_analysis_has_room_to_finish_inside_16k_context(
+    tmp_path: Path,
+) -> None:
+    frames = []
+    for index in range(8):
+        frame = tmp_path / f"frame-{index + 1}.jpg"
+        frame.write_bytes(b"jpeg")
+        frames.append(frame)
+    project = Project(
+        id="reference-project",
+        title="Reference",
+        idea="Reconstruct the reference",
+        duration_seconds=10,
+        visual_style="",
+        research_required=False,
+        source_mode=SourceMode.REFERENCE,
+        state=ProjectState.REFERENCE_ANALYSIS,
+        execution_mode=ExecutionMode.REAL,
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+    )
+    captured: dict = {}
+
+    class Model:
+        model = "qwen"
+
+        def analyze_images(self, _output_type, **kwargs):
+            captured.update(kwargs)
+            return ReferenceAnalyzer._simulation_blueprint(
+                project, "reference.mp4", frames
+            )
+
+    ReferenceAnalyzer(Model()).analyze(
+        project, frames, source_name="reference.mp4"
+    )
+
+    assert captured["max_tokens"] == 6144
+    assert "under 25 words" in captured["system"]
+    assert "always close every array and object" in captured["system"]
 
 def test_image_analysis_recovers_from_malformed_json(
     monkeypatch, tmp_path: Path
