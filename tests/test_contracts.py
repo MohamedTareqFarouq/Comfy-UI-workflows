@@ -430,6 +430,57 @@ def test_video_retry_schema_excludes_irrelevant_keyframe_fields() -> None:
     }
     assert properties["negative_prompt"]["maxLength"] == 1800
 
+def test_image_analysis_recovers_from_malformed_json(
+    monkeypatch, tmp_path: Path
+) -> None:
+    valid = {
+        "advisory_pass": False,
+        "scores": {"prompt_adherence": 0.4},
+        "reasons": ["Identity mismatch"],
+    }
+    responses = [
+        '{"advisory_pass": false "scores": {}}',
+        '{"advisory_pass":',
+        json.dumps(valid),
+    ]
+    requests: list[dict] = []
+
+    class Response:
+        def __init__(self, content: str):
+            self.content = content
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"choices": [{"message": {"content": self.content}}]}
+
+    def fake_post(*_args, **kwargs):
+        requests.append(json.loads(json.dumps(kwargs["json"])))
+        return Response(responses.pop(0))
+
+    gateway = ModelGateway(
+        "http://127.0.0.1:8080", "qwen", log_path=tmp_path / "qwen.log"
+    )
+    monkeypatch.setattr(gateway, "ensure_available", lambda: None)
+    monkeypatch.setattr("vertical_studio.services.model_gateway.httpx.post", fake_post)
+
+    review = gateway.analyze_images(
+        VisualReview,
+        system="Review the supplied image.",
+        prompt="Check prompt adherence.",
+        image_urls=["data:image/jpeg;base64,AA=="],
+    )
+
+    assert review.reasons == ["Identity mismatch"]
+    assert len(requests) == 3
+    assert requests[2]["temperature"] == 0
+    correction = requests[2]["messages"][-1]["content"]
+    assert "malformed, truncated" in correction
+    assert "finish the complete JSON object" in correction
+    assert gateway.last_trace["structured_attempt"] == 3
+    assert gateway.last_trace["image_count"] == 1
+
 
 def test_retry_negative_prompt_is_deduplicated_bounded_and_style_safe() -> None:
     repeated = ", ".join(

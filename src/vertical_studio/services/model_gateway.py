@@ -282,15 +282,60 @@ class ModelGateway:
             "max_tokens": max_tokens,
             "response_format": {"type": "json_schema", "schema": schema},
         }
-        try:
-            response = httpx.post(
-                f"{self.base_url}/v1/chat/completions", json=payload, timeout=self.timeout
-            )
-            self._raise_for_status_with_detail(response)
-            value = response.json()["choices"][0]["message"]["content"]
-            return self._parse_structured(output_type, value)
-        except (httpx.HTTPError, KeyError, ValueError) as exc:
-            raise ModelUnavailable(str(exc)) from exc
+        base_messages = list(payload["messages"])
+        last_error: Exception | None = None
+        last_content = ""
+        for attempt in range(3):
+            try:
+                response = httpx.post(
+                    f"{self.base_url}/v1/chat/completions",
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                self._raise_for_status_with_detail(response)
+                last_content = response.json()["choices"][0]["message"]["content"]
+                parsed = self._parse_structured(output_type, last_content)
+                self.last_trace = {
+                    "model": self.model,
+                    "request": payload,
+                    "raw_response": last_content,
+                    "parsed_response": parsed.model_dump(mode="json"),
+                    "structured_attempt": attempt + 1,
+                    "image_count": len(image_urls),
+                }
+                return parsed
+            except (httpx.HTTPError, KeyError, ValueError) as exc:
+                last_error = exc
+                if attempt == 2:
+                    break
+                economy = (
+                    " Keep every string and list concise. Omit optional detail rather than "
+                    "repeating information, and finish the complete JSON object within the "
+                    "output limit."
+                    if attempt == 1 else ""
+                )
+                payload["messages"] = [
+                    *base_messages,
+                    {
+                        "role": "user",
+                        "content": (
+                            "Regenerate the complete object from scratch as strict JSON. "
+                            "The previous response was discarded because it was malformed, "
+                            "truncated, or failed schema validation. Do not add Markdown, "
+                            "commentary, wrapper objects, trailing commas, or unescaped line "
+                            "breaks. The JSON Schema is already in the first user message."
+                            + economy
+                            + "\nValidation error:\n"
+                            + str(exc)[:1200]
+                        ),
+                    },
+                ]
+                payload["temperature"] = 0
+                last_content = ""
+        self._record_invalid_response(last_content, last_error)
+        raise ModelUnavailable(
+            f"invalid structured image-analysis response after 3 attempts: {last_error}"
+        ) from last_error
 
     def unload(self) -> None:
         with self._lock:
