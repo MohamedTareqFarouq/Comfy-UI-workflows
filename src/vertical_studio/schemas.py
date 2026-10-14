@@ -176,6 +176,43 @@ class ReferenceBlueprint(BaseModel):
     evidence_summary: list[str] = Field(default_factory=list, max_length=32)
     ambiguities: list[str] = Field(default_factory=list, max_length=24)
 
+    @model_validator(mode="after")
+    def normalize_continuity_boundaries(self) -> "ReferenceBlueprint":
+        normalized: list[SceneSpec] = []
+        seen: set[str] = set()
+        previous: str | None = None
+        for index, scene in enumerate(self.scenes):
+            group = scene.continuity_group
+            if group != previous and group in seen:
+                base = group[:72]
+                suffix = index + 1
+                candidate = f"{base}-{suffix}"
+                while candidate in seen:
+                    suffix += 1
+                    candidate = f"{base}-{suffix}"
+                group = candidate
+            starts_new = index == 0 or group != previous
+            transition = scene.transition_from_previous
+            if index == 0:
+                transition = "new_sequence"
+            elif starts_new and transition == "continuous":
+                transition = "new_sequence"
+            elif not starts_new and transition == "new_sequence":
+                transition = "continuous"
+            normalized.append(
+                scene.model_copy(
+                    update={
+                        "continuity_group": group,
+                        "starts_new_continuity": starts_new,
+                        "transition_from_previous": transition,
+                    }
+                )
+            )
+            seen.add(group)
+            previous = group
+        self.scenes = normalized
+        return self
+
     def as_storyboard(self) -> "Storyboard":
         style_text = "; ".join(filter(None, [
             self.style.medium,

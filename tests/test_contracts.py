@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from vertical_studio.orchestrator import Orchestrator
-from vertical_studio.schemas import ProjectState, SceneState, Storyboard, VideoRetryPromptProposal, VisualReview
+from vertical_studio.schemas import ProjectState, ReferenceBlueprint, SceneState, Storyboard, VideoRetryPromptProposal, VisualReview
 from vertical_studio.services.comfy import ComfyClient, GenerationError, GenerationResult
 from vertical_studio.services.model_gateway import ModelGateway
 from vertical_studio.services.mock_comfy import MockComfyClient
@@ -87,6 +87,35 @@ def test_storyboard_enforces_endpoint_environment_continuity() -> None:
             canonical_assets=assets,
             scenes=broken,
         )
+
+
+def test_reference_blueprint_normalizes_model_continuity_flags() -> None:
+    def scene(group: str, starts: bool, transition: str) -> dict:
+        return {
+            "title": group,
+            "narrative_purpose": "Advance the reconstruction",
+            "duration_seconds": 3,
+            "start_composition": "Opening frame",
+            "end_composition": "Closing frame",
+            "motion": "One clear action",
+            "continuity_group": group,
+            "starts_new_continuity": starts,
+            "transition_from_previous": transition,
+        }
+
+    blueprint = ReferenceBlueprint(
+        summary="Recovered reference",
+        style={"medium": "animation", "visual_language": "clean shapes"},
+        motion={"animation_style": "smooth movement"},
+        scenes=[
+            scene("court", False, "continuous"),
+            scene("court", True, "new_sequence"),
+            scene("locker-room", False, "continuous"),
+        ],
+    )
+    storyboard = blueprint.as_storyboard()
+    assert [item.starts_new_continuity for item in storyboard.scenes] == [True, False, True]
+    assert [item.transition_from_previous for item in storyboard.scenes] == ["new_sequence", "continuous", "new_sequence"]
 
 
 def test_keyframes_use_different_environment_references_per_endpoint(
