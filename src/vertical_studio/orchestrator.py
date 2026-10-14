@@ -11,9 +11,8 @@ from .schemas import (ApprovalRequest, ArtifactKind, ArtifactSelection, Canonica
  RetryPromptRevisionRequest, RetryRequest, Scene, SceneSpec, SceneState, SourceMode,
  Storyboard, VideoRetryPromptProposal)
 from .services.gpu import GpuCoordinator
-from .services.media import extract_frames, probe_media, sha256_file
+from .services.media import probe_media, sha256_file
 from .services.model_gateway import ModelGateway, ModelUnavailable
-from .services.reference import ReferenceAnalyzer
 from .services.research import BraveResearchProvider
 
 def stable_key(*values: Any) -> str:
@@ -131,7 +130,7 @@ class Orchestrator:
             artifact_id=artifact.id,
         )
 
-    def analyze_reference(self, project_id: str) -> dict[str, Any]:
+    def analyze_reference(self, project_id: str) -> Job:
         project = self.db.get_project(project_id)
         if project.source_mode != SourceMode.REFERENCE:
             raise ValueError("project was not created in reference mode")
@@ -145,48 +144,31 @@ class Orchestrator:
         if source is None:
             raise ValueError("upload a reference video before analysis")
 
-        evidence_dir = (
-            self.settings.projects_dir / project_id / "reference" / "evidence"
-            / f"analysis-{len(self.db.list_artifacts(project_id)) + 1}"
+        prior = [
+            job for job in self.db.list_jobs(project_id)
+            if job.kind == JobKind.REFERENCE_ANALYSIS
+        ]
+        active = next(
+            (
+                job for job in reversed(prior)
+                if job.state in {JobState.QUEUED, JobState.RUNNING}
+            ),
+            None,
         )
-        frames = extract_frames(Path(source["path"]), evidence_dir, count=8)
-        evidence_ids = []
-        for index, frame in enumerate(frames, 1):
-            artifact = self.db.add_artifact(
-                project_id,
-                ArtifactKind.IMAGE,
-                frame,
-                sha256_file(frame),
-                {
-                    "role": "reference_evidence",
-                    "source_id": source["id"],
-                    "order": index,
-                    "sample_count": len(frames),
-                },
-            )
-            evidence_ids.append(artifact.id)
-
-        analyzer = ReferenceAnalyzer(
-            self.model, simulation=self.settings.is_simulation
-        )
-        if self.settings.is_simulation:
-            blueprint, trace = analyzer.analyze(
-                project, frames, source_name=source["original_name"]
-            )
-        else:
-            with self.gpu.qwen():
-                blueprint, trace = analyzer.analyze(
-                    project, frames, source_name=source["original_name"]
-                )
-        trace["evidence_artifact_ids"] = evidence_ids
-        analysis = self.db.save_reference_analysis(
+        if active:
+            return active
+        payload = {
+            "source_id": source["id"],
+            "source_name": source["original_name"],
+            "analysis_round": len(prior) + 1,
+            "frame_count": 8,
+        }
+        return self.db.create_job(
             project_id,
-            source["id"],
-            blueprint.model_dump(mode="json"),
-            trace,
+            JobKind.REFERENCE_ANALYSIS,
+            stable_key("reference_analysis", project_id, payload),
+            payload,
         )
-        self.db.transition_project(project_id, ProjectState.REFERENCE_REVIEW)
-        return analysis
 
     def approve_reference_analysis(
         self, project_id: str, request: ApprovalRequest

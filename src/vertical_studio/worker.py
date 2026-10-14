@@ -9,8 +9,9 @@ from .schemas import ArtifactKind, Job, JobKind, JobState, ProjectState, SceneSt
 from .services.comfy import GenerationError, Generator
 from .services.gpu import GpuCoordinator
 from .services.model_gateway import ModelUnavailable
-from .services.media import probe_media, sha256_file
+from .services.media import extract_frames, probe_media, sha256_file
 from .services.qa import QualityService
+from .services.reference import ReferenceAnalyzer
 from .services.renderer import Renderer
 
 class Worker:
@@ -27,6 +28,7 @@ class Worker:
         if not job: return None
         try:
             {
+                JobKind.REFERENCE_ANALYSIS: self._reference_analysis,
                 JobKind.CANONICAL_ASSET: self._canonical_asset,
                 JobKind.CHARACTER_SHEET: self._character_sheet,
                 JobKind.KEYFRAME: self._keyframes,
@@ -76,6 +78,75 @@ class Worker:
             if artifact.metadata.get("role") == role and isinstance(candidate, int):
                 result.setdefault(candidate, artifact)
         return result
+
+    def _reference_analysis(self, job: Job) -> None:
+        source = self.db.get_reference_source(job.project_id)
+        if source is None or source["id"] != job.payload.get("source_id"):
+            raise GenerationError(
+                "reference_source_missing",
+                "the queued reference source is no longer available",
+            )
+        project = self.db.get_project(job.project_id)
+        round_number = int(job.payload.get("analysis_round", 1))
+        evidence_dir = (
+            self.settings.projects_dir / job.project_id / "reference" / "evidence"
+            / f"analysis-{round_number}"
+        )
+        frames = extract_frames(
+            Path(source["path"]),
+            evidence_dir,
+            count=int(job.payload.get("frame_count", 8)),
+        )
+        if self.qa.model is None:
+            raise GenerationError(
+                "model_unavailable", "reference analysis requires a configured model"
+            )
+        analyzer = ReferenceAnalyzer(
+            self.qa.model, simulation=self.settings.is_simulation
+        )
+        try:
+            if self.settings.is_simulation:
+                blueprint, trace = analyzer.analyze(
+                    project, frames, source_name=source["original_name"]
+                )
+            else:
+                with self.gpu.qwen():
+                    blueprint, trace = analyzer.analyze(
+                        project, frames, source_name=source["original_name"]
+                    )
+        except ModelUnavailable as exc:
+            raise GenerationError(
+                "model_unavailable", str(exc), transient=True
+            ) from exc
+        if self.db.get_job(job.id).state == JobState.CANCELLED:
+            return
+        evidence_ids = []
+        for index, frame in enumerate(frames, 1):
+            artifact = self.db.add_artifact(
+                job.project_id,
+                ArtifactKind.IMAGE,
+                frame,
+                sha256_file(frame),
+                {
+                    "role": "reference_evidence",
+                    "source_id": source["id"],
+                    "analysis_round": round_number,
+                    "order": index,
+                    "sample_count": len(frames),
+                },
+            )
+            evidence_ids.append(artifact.id)
+        trace["evidence_artifact_ids"] = evidence_ids
+        trace["job_id"] = job.id
+        self.db.save_reference_analysis(
+            job.project_id,
+            source["id"],
+            blueprint.model_dump(mode="json"),
+            trace,
+        )
+        self.db.transition_project(
+            job.project_id, ProjectState.REFERENCE_REVIEW
+        )
 
     def _canonical_asset(self, job: Job) -> None:
         seed = random.randrange(1, 2**31)

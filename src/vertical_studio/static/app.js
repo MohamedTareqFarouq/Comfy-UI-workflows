@@ -47,6 +47,7 @@ function when(value){
 }
 
 const jobLabels={
+  reference_analysis:"Analyzing the reference video with Qwen",
   canonical_asset:"Generating a canonical reference with Flux",
   character_sheet:"Generating the character sheet with Flux",
   keyframe:"Generating continuity keyframes with Flux",

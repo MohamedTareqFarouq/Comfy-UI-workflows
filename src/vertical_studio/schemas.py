@@ -59,6 +59,7 @@ class JobState(StrEnum):
 
 
 class JobKind(StrEnum):
+    REFERENCE_ANALYSIS = "reference_analysis"
     CANONICAL_ASSET = "canonical_asset"
     CHARACTER_SHEET = "character_sheet"
     KEYFRAME = "keyframe"

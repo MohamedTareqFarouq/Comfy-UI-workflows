@@ -97,9 +97,10 @@ Normal Linux/WSL laptop:
 ./start.sh --real --managed-qwen
 ```
 
-The Lightning launcher uses Qwen3-VL-8B-Instruct Q4_K_M with a 32,768-token
-runtime context. This gives reference-video analysis enough room for eight
-evidence frames, its structured schema and the generated blueprint. Override
+The Lightning launcher uses Qwen3-VL-8B-Instruct Q4_K_M with a 16,384-token
+runtime context. This gives reference-video analysis room for eight evidence
+frames, its structured schema and the generated blueprint without reserving a
+32K context window. Override
 `VVS_QWEN_HF_REPO`, `VVS_QWEN_MODEL` or `VVS_QWEN_CONTEXT_SIZE` when needed.
 
 Use `VVS_PYTHON=/path/to/python` or `VVS_USE_ACTIVE_ENV=1` to override automatic

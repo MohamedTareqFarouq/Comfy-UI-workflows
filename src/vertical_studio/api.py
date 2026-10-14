@@ -150,7 +150,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
 
-    @app.post("/api/projects/{project_id}/reference/analyze")
+    @app.post("/api/projects/{project_id}/reference/analyze", status_code=202)
     def analyze_reference(project_id: str):
         try:
             return components.orchestrator.analyze_reference(project_id)

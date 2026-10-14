@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -134,15 +135,24 @@ def test_reference_video_becomes_reviewable_storyboard(
         analyzed = client.post(
             f"/api/projects/{project_id}/reference/analyze"
         )
-        assert analyzed.status_code == 200
-        blueprint = analyzed.json()["blueprint"]
+        assert analyzed.status_code == 202
+        job = analyzed.json()
+        assert job["id"]
+        assert job["kind"] == "reference_analysis"
+        assert job["state"] == "queued"
+
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            detail = client.get(f"/api/projects/{project_id}").json()
+            if detail["project"]["state"] == "reference_review":
+                break
+            time.sleep(0.05)
+        assert detail["project"]["state"] == "reference_review"
+        blueprint = detail["reference_analysis"]["blueprint"]
         assert blueprint["style"]["medium"]
         assert blueprint["motion"]["animation_style"]
         assert len(blueprint["canonical_assets"]) == 2
         assert len(blueprint["scenes"]) >= 3
-
-        detail = client.get(f"/api/projects/{project_id}").json()
-        assert detail["project"]["state"] == "reference_review"
         assert detail["reference_source"]["artifact_id"]
         evidence = [
             artifact for artifact in detail["artifacts"]
