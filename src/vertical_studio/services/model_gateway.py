@@ -24,7 +24,7 @@ class ModelGateway:
         self,
         base_url: str,
         model: str,
-        timeout: float = 180.0,
+        timeout: float = 600.0,
         *,
         managed: bool = False,
         executable: str = "llama",

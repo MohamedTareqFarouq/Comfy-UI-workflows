@@ -766,7 +766,7 @@ class Database:
             data.pop(key, None)
         return Job(**data)
 
-    def claim_next_job(self, owner: str, lease_seconds: int = 300) -> Job | None:
+    def claim_next_job(self, owner: str, lease_seconds: int = 900) -> Job | None:
         now = datetime.now(timezone.utc)
         now_text = now.isoformat()
         lease_expires = (now + timedelta(seconds=lease_seconds)).isoformat()

@@ -31,6 +31,7 @@ class Settings:
     qwen_gpu_layers: int = 99
     qwen_context_size: int = 16384
     qwen_start_timeout: int = 300
+    qwen_request_timeout: int = 600
     brave_api_key: str | None = None
 
     @property
@@ -76,6 +77,7 @@ def load_settings() -> Settings:
         qwen_gpu_layers=int(os.getenv("VVS_QWEN_GPU_LAYERS", "99")),
         qwen_context_size=int(os.getenv("VVS_QWEN_CONTEXT_SIZE", "16384")),
         qwen_start_timeout=int(os.getenv("VVS_QWEN_START_TIMEOUT", "300")),
+        qwen_request_timeout=int(os.getenv("VVS_QWEN_REQUEST_TIMEOUT", "600")),
         brave_api_key=os.getenv("VVS_BRAVE_API_KEY") or None,
     )
     settings.ensure_directories()

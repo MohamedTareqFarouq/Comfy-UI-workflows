@@ -33,6 +33,7 @@ class Components:
         self.model = ModelGateway(
             settings.llama_url,
             settings.qwen_model,
+            timeout=settings.qwen_request_timeout,
             managed=settings.manage_qwen and not settings.is_simulation,
             executable=settings.llama_executable,
             hf_repo=settings.qwen_hf_repo,
