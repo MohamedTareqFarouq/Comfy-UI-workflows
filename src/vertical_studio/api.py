@@ -58,16 +58,38 @@ class Components:
             gpu=self.gpu,
         )
         self.thread: threading.Thread | None = None
+        self._thread_lock = threading.RLock()
+        self._reconciled = False
+
+    @property
+    def worker_alive(self) -> bool:
+        return self.thread is not None and self.thread.is_alive()
+
+    def ensure_worker(self) -> bool:
+        """Start or recover the in-process worker when the API is accepting jobs."""
+        with self._thread_lock:
+            if self.worker_alive:
+                return True
+            self.thread = threading.Thread(
+                target=self.worker.serve,
+                daemon=True,
+                name="vertical-studio-worker",
+            )
+            self.thread.start()
+            return self.thread.is_alive()
 
     def start(self) -> None:
-        self.orchestrator.reconcile_all_project_states()
-        if not self.thread or not self.thread.is_alive():
-            self.thread = threading.Thread(target=self.worker.serve, daemon=True, name="vertical-studio-worker")
-            self.thread.start()
+        with self._thread_lock:
+            if not self._reconciled:
+                self.orchestrator.reconcile_all_project_states()
+                self._reconciled = True
+            self.ensure_worker()
 
     def stop(self) -> None:
         self.worker.stop()
-        if self.thread: self.thread.join(timeout=5)
+        with self._thread_lock:
+            if self.thread:
+                self.thread.join(timeout=5)
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
@@ -93,6 +115,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "generator": components.generator.health(), "model": components.model.health(),
             "data_dir": str(settings.data_dir), "real_generation_enabled": not settings.is_simulation,
             "managed_qwen": settings.manage_qwen, "qwen_loaded": components.model.owned,
+            "worker_alive": components.worker_alive,
         }
 
     @app.get("/api/projects")
@@ -154,7 +177,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/projects/{project_id}/reference/analyze", status_code=202)
     def analyze_reference(project_id: str):
         try:
-            return components.orchestrator.analyze_reference(project_id)
+            job = components.orchestrator.analyze_reference(project_id)
+            if not components.ensure_worker():
+                raise RuntimeError("the background worker could not be started")
+            return job
         except Exception as exc:
             fail(exc)
 
@@ -319,6 +345,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await asyncio.sleep(.5)
         except WebSocketDisconnect: pass
 
+    app.state.components = components
     app.mount("/", StaticFiles(directory=settings.static_dir, html=True), name="static")
     return app
 

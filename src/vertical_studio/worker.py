@@ -1,5 +1,5 @@
 from __future__ import annotations
-import random, socket, threading
+import logging, random, socket, threading
 from pathlib import Path
 from typing import Any
 from .config import Settings
@@ -13,6 +13,9 @@ from .services.media import extract_frames, probe_media, sha256_file
 from .services.qa import QualityService
 from .services.reference import ReferenceAnalyzer
 from .services.renderer import Renderer
+
+logger = logging.getLogger(__name__)
+
 
 class Worker:
     def __init__(self, db: Database, settings: Settings, generator: Generator,
@@ -59,7 +62,15 @@ class Worker:
 
     def serve(self, poll_seconds: float = .5) -> None:
         while not self._stop.is_set():
-            if self.run_once() is None: self._stop.wait(poll_seconds)
+            try:
+                if self.run_once() is None:
+                    self._stop.wait(poll_seconds)
+            except Exception:
+                # Claim/reconciliation failures happen outside run_once's per-job
+                # exception boundary. Keep the API worker alive and make the cause
+                # visible instead of silently stranding all queued jobs.
+                logger.exception("background worker loop failed")
+                self._stop.wait(max(1.0, poll_seconds))
 
     def stop(self) -> None:
         self._stop.set(); self.generator.interrupt()

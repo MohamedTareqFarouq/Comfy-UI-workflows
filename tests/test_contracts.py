@@ -14,6 +14,14 @@ from vertical_studio.services.reference import ReferenceAnalyzer
 from vertical_studio.state import InvalidTransition, validate_project_transition, validate_scene_transition
 
 
+def test_components_can_start_and_report_background_worker(components) -> None:
+    assert components.worker_alive is False
+    assert components.ensure_worker() is True
+    assert components.worker_alive is True
+    components.stop()
+    assert components.worker_alive is False
+
+
 def test_invalid_state_transitions_are_rejected() -> None:
     with pytest.raises(InvalidTransition):
         validate_project_transition(ProjectState.DRAFT, ProjectState.COMPLETE)
