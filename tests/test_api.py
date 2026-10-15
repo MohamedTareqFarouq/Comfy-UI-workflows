@@ -182,7 +182,7 @@ def test_reference_video_becomes_reviewable_storyboard(
         evidence_ids = {artifact["id"] for artifact in evidence}
         jobs = queued.json()
         assert jobs
-        assert all(1 <= len(job["payload"]["reference_frames"]) <= 4 for job in jobs)
+        assert all(1 <= len(job["payload"]["reference_frames"]) <= 2 for job in jobs)
         assert all(
             {frame["artifact_id"] for frame in job["payload"]["reference_frames"]}
             <= evidence_ids

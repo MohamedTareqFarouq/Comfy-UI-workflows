@@ -148,7 +148,7 @@ class CanonicalAssetSpec(BaseModel):
     label: str = Field(min_length=1, max_length=160)
     prompt: str = Field(min_length=1, max_length=2000)
     description: str = Field(default="", max_length=1200)
-    evidence_frame_indices: list[int] = Field(default_factory=list, max_length=4)
+    evidence_frame_indices: list[int] = Field(default_factory=list, max_length=2)
 
     @field_validator("evidence_frame_indices")
     @classmethod
@@ -485,20 +485,9 @@ class Storyboard(BaseModel):
                     raise ValueError(
                         "a connected scene opening environment must match the previous closing environment"
                     )
-                opening_required = set(scene.characters_present) | set(scene.important_props)
-                if opening_environment:
-                    opening_required.add(opening_environment)
-                if len(opening_required) > 4:
-                    raise ValueError(
-                        "opening keyframe exceeds the four-reference model limit; split the scene"
-                    )
-                closing_required = set(scene.characters_present) | set(scene.important_props)
-                if closing_environment != opening_environment and closing_environment:
-                    closing_required.add(closing_environment)
-                if len(closing_required) > 3:
-                    raise ValueError(
-                        "closing keyframe exceeds three canonical references plus the opening frame; split the scene"
-                    )
+                # FLUX Edit uses only one selected canonical character or environment
+                # alongside the opening/continuity frame. Other asset keys remain useful
+                # scene metadata but are not additional image-conditioning inputs.
                 previous_closing_environment = closing_environment
                 previous_group = scene.continuity_group
         return self

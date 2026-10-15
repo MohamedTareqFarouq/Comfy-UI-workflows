@@ -21,9 +21,10 @@
           "flux2-vae.safetensors"
         ],
         "edit_api_template": "flux_edit_api.json",
+        "single_edit_api_template": "image_flux2_klein_image_edit_4b_distilled_api.json",
         "continuity_inputs": [
           "source_image",
-          "character_sheet"
+          "reference_image"
         ]
       }
     }

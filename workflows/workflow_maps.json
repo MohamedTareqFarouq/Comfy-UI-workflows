@@ -60,6 +60,24 @@
       "input": "filename_prefix"
     }
   },
+  "image_flux2_klein_image_edit_4b_distilled_api": {
+    "prompt": {
+      "node_id": "75:74",
+      "input": "text"
+    },
+    "seed": {
+      "node_id": "75:73",
+      "input": "noise_seed"
+    },
+    "source_image": {
+      "node_id": "76",
+      "input": "image"
+    },
+    "output_prefix": {
+      "node_id": "9",
+      "input": "filename_prefix"
+    }
+  },
   "flux_edit_api": {
     "prompt": {
       "node_id": "92:109",
@@ -73,7 +91,7 @@
       "node_id": "76",
       "input": "image"
     },
-    "character_sheet": {
+    "reference_image": {
       "node_id": "81",
       "input": "image"
     },

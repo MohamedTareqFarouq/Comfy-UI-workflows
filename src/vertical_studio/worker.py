@@ -267,8 +267,12 @@ class Worker:
                 })
             return result
 
-        opening_references = references(opening_keys, 4)
-        closing_references = references(closing_keys, 3)
+        # FLUX Edit receives at most one canonical identity/environment reference.
+        # Its other slot is reserved for the exact prior/opening frame when continuity
+        # is required. The ordering above chooses a character by default and chooses
+        # the destination environment first for a location transition.
+        opening_references = references(opening_keys, 1)
+        closing_references = references(closing_keys, 1)
         generation_payload["opening_canonical_references"] = opening_references
         generation_payload["closing_canonical_references"] = closing_references
         generation_payload["canonical_references"] = list({
@@ -283,7 +287,7 @@ class Worker:
             previous = scenes[index - 1]
             if previous.spec.continuity_group != scene.spec.continuity_group:
                 raise GenerationError("continuity_dependency_missing", "previous scene belongs to another continuity group")
-            candidates = int(job.payload.get("candidates", 2))
+            candidates = int(job.payload.get("candidates", 1))
             if previous.state == SceneState.KEYFRAMES_APPROVED and previous.selected_end_artifact_id:
                 approved_end = self.db.get_artifact(previous.selected_end_artifact_id)
                 generation_payload["source_frames"] = [
@@ -307,7 +311,7 @@ class Worker:
                     for candidate in range(1, candidates + 1)
                 ]
         attempt = self.db.create_attempt(
-            job, "flux-klein-native-multireference-v1", seed, generation_payload
+            job, "flux-klein-edit-two-reference-v1", seed, generation_payload
         )
         try:
             with self.gpu.comfy(reset_models=False):
@@ -333,9 +337,9 @@ class Worker:
                 role = tokens[-1] if tokens[-1] in {"start", "end"} else "candidate"
                 if generation_payload.get("canonical_references"):
                     method = (
-                        "flux_klein_multireference_anchor"
+                        "flux_klein_edit_reference_anchor"
                         if role == "start"
-                        else "flux_klein_multireference_transition"
+                        else "flux_klein_edit_reference_transition"
                     )
                 else:
                     method = "t2i_anchor" if role == "start" else "flux_edit"

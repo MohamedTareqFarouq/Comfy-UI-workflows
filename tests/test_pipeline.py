@@ -269,7 +269,7 @@ def test_cross_scene_artifact_selection_is_rejected(components) -> None:
         )
 
 
-def test_keyframe_roles_and_candidates_cannot_be_swapped(components) -> None:
+def test_keyframe_roles_cannot_be_swapped(components) -> None:
     project = components.orchestrator.create_project(
         ProjectCreate(idea="Bind the correct start and end frames", duration_seconds=10)
     )
@@ -286,10 +286,7 @@ def test_keyframe_roles_and_candidates_cannot_be_swapped(components) -> None:
         item for item in artifacts
         if item.metadata.get("candidate") == 1 and item.metadata.get("role") == "end"
     )
-    end_2 = next(
-        item for item in artifacts
-        if item.metadata.get("candidate") == 2 and item.metadata.get("role") == "end"
-    )
+    assert not any(item.metadata.get("candidate") == 2 for item in artifacts)
 
     with pytest.raises(ValueError, match="not a start keyframe"):
         components.orchestrator.approve_keyframes(
@@ -297,13 +294,6 @@ def test_keyframe_roles_and_candidates_cannot_be_swapped(components) -> None:
             ArtifactSelection(start_artifact_id=end_1.id, end_artifact_id=start_1.id),
             ApprovalRequest(approved=True),
         )
-    with pytest.raises(ValueError, match="same candidate"):
-        components.orchestrator.approve_keyframes(
-            scene.id,
-            ArtifactSelection(start_artifact_id=start_1.id, end_artifact_id=end_2.id),
-            ApprovalRequest(approved=True),
-        )
-
     components.orchestrator.approve_keyframes(
         scene.id,
         ArtifactSelection(start_artifact_id=start_1.id, end_artifact_id=end_1.id),
@@ -492,12 +482,12 @@ def test_keyframe_regeneration_stops_and_rebuilds_connected_chain(components) ->
         artifact for artifact in components.db.list_artifacts(project.id, next_scene.id)
         if artifact.attempt_id == next_attempt["id"] and artifact.metadata.get("role") == "start"
     ]
-    assert len(starts) == 2
+    assert len(starts) == 1
     assert all(item.metadata["shared_from_artifact_id"] == selected_end.id for item in starts)
     assert all(item.path == selected_end.path for item in starts)
 
 
-def test_continuity_break_creates_a_fresh_multireference_anchor(components) -> None:
+def test_continuity_break_creates_a_fresh_flux_edit_reference_anchor(components) -> None:
     project = components.orchestrator.create_project(
         ProjectCreate(idea="A platform scene followed by a different train interior", duration_seconds=10)
     )
@@ -525,7 +515,7 @@ def test_continuity_break_creates_a_fresh_multireference_anchor(components) -> N
         item for item in components.db.list_artifacts(project.id, scenes[2].id)
         if item.metadata.get("candidate") == 1 and item.metadata.get("role") == "start"
     )
-    assert reset_start.metadata["generation_method"] == "flux_klein_multireference_anchor"
+    assert reset_start.metadata["generation_method"] == "flux_klein_edit_reference_anchor"
     assert "shared_from_artifact_id" not in reset_start.metadata
     assert reset_start.path != prior_end.path
 

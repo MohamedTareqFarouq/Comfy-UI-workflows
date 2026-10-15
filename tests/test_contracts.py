@@ -126,23 +126,23 @@ def test_reference_blueprint_normalizes_model_continuity_flags() -> None:
     assert all(item.reference_keys == ["player"] for item in storyboard.scenes)
 
 
-def test_keyframes_use_different_environment_references_per_endpoint(
+def test_keyframes_use_at_most_two_edit_references_per_endpoint(
     monkeypatch, tmp_path: Path
 ) -> None:
     client = ComfyClient("http://127.0.0.1:1", tmp_path)
-    calls: list[list[str]] = []
+    calls: list[tuple[str, str | None]] = []
 
-    def fake_multiref(
+    def fake_edit(
         output: Path, _payload: dict, *, prompt: str, seed: int,
-        references: list[dict], output_prefix: str,
+        source_path: Path, reference_path: Path | None, output_prefix: str,
     ) -> GenerationResult:
-        calls.append([reference["key"] for reference in references])
+        calls.append((source_path.name, reference_path.name if reference_path else None))
         output.mkdir(parents=True, exist_ok=True)
         path = output / f"{output_prefix}.png"
         path.write_bytes(f"{prompt}:{seed}".encode())
         return GenerationResult(files=[path], metadata={})
 
-    monkeypatch.setattr(client, "_generate_multiref_image", fake_multiref)
+    monkeypatch.setattr(client, "_generate_edit_image", fake_edit)
     client.generate_keyframes(
         tmp_path / "output",
         {
@@ -169,13 +169,13 @@ def test_keyframes_use_different_environment_references_per_endpoint(
                 {"key": "kitchen", "role": "environment", "label": "Kitchen", "path": "kitchen.png"},
             ],
             "closing_canonical_references": [
-                {"key": "leo", "role": "character", "label": "Leo", "path": "leo.png"},
                 {"key": "dining_room", "role": "environment", "label": "Dining room", "path": "dining.png"},
+                {"key": "leo", "role": "character", "label": "Leo", "path": "leo.png"},
             ],
         },
     )
-    assert calls[0] == ["leo", "kitchen"]
-    assert calls[1] == ["opening_frame", "leo", "dining_room"]
+    assert calls[0] == ("leo.png", None)
+    assert calls[1] == ("candidate-1-start.png", "dining.png")
 
 def test_reference_asset_uses_source_evidence(
     monkeypatch, tmp_path: Path
@@ -183,22 +183,23 @@ def test_reference_asset_uses_source_evidence(
     client = ComfyClient("http://127.0.0.1:1", tmp_path)
     captured: dict = {}
 
-    def fake_multiref(
+    def fake_edit(
         output: Path, _payload: dict, *, prompt: str, seed: int,
-        references: list[dict], output_prefix: str,
+        source_path: Path, reference_path: Path | None, output_prefix: str,
     ) -> GenerationResult:
         captured.update({
             "prompt": prompt,
             "seed": seed,
-            "references": references,
+            "source_path": source_path,
+            "reference_path": reference_path,
             "output_prefix": output_prefix,
         })
         output.mkdir(parents=True, exist_ok=True)
         path = output / "asset.png"
         path.write_bytes(b"asset")
-        return GenerationResult(files=[path], metadata={"references": references})
+        return GenerationResult(files=[path], metadata={})
 
-    monkeypatch.setattr(client, "_generate_multiref_image", fake_multiref)
+    monkeypatch.setattr(client, "_generate_edit_image", fake_edit)
     result = client.generate_reference_asset(
         tmp_path / "output",
         {
@@ -216,7 +217,8 @@ def test_reference_asset_uses_source_evidence(
             ],
         },
     )
-    assert captured["references"][0]["path"] == "frame-2.jpg"
+    assert captured["source_path"] == Path("frame-2.jpg")
+    assert captured["reference_path"] is None
     assert "primary visual truth" in captured["prompt"]
 
 
@@ -541,7 +543,7 @@ def test_retry_negative_prompt_is_deduplicated_bounded_and_style_safe() -> None:
     assert terms[-1] == "artifact 58"
 
 
-def test_flux_edit_receives_previous_frame_character_sheet_and_style(monkeypatch, tmp_path: Path) -> None:
+def test_flux_edit_receives_previous_frame_reference_image_and_style(monkeypatch, tmp_path: Path) -> None:
     client = ComfyClient("http://127.0.0.1:1", tmp_path)
     source = tmp_path / "previous.png"
     sheet = tmp_path / "sheet.png"
@@ -591,11 +593,11 @@ def test_flux_edit_receives_previous_frame_character_sheet_and_style(monkeypatch
         },
     )
     assert result.files[0].name == "candidate-1-end.png"
-    assert {"source_image", "character_sheet"} <= captured["required"]
+    assert {"source_image", "reference_image"} <= captured["required"]
     assert "first_frame" not in captured["required"]
     values = {patch["input"]: patch["value"] for patch in captured["patches"]}
     assert values["source_image"] == source.name
-    assert values["character_sheet"] == sheet.name
+    assert values["reference_image"] == sheet.name
     assert "MANDATORY VISUAL STYLE: hand-drawn cel cartoon" in values["prompt"]
     assert "photorealistic" in values["prompt"]
 

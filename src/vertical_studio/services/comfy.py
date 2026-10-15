@@ -262,13 +262,20 @@ class ComfyClient:
 
     def _generate_edit_image(
         self, output_dir: Path, payload: dict[str, Any], *, prompt: str,
-        seed: int, source_path: Path, character_sheet_path: Path | None,
+        seed: int, source_path: Path, reference_path: Path | None,
         output_prefix: str,
     ) -> GenerationResult:
-        template = payload.get("edit_template", "flux_edit_api")
+        template = (
+            payload.get("edit_template", "flux_edit_api")
+            if reference_path is not None
+            else payload.get(
+                "single_edit_template",
+                "image_flux2_klein_image_edit_4b_distilled_api",
+            )
+        )
         required = {"prompt", "seed", "source_image", "output_prefix"}
-        if character_sheet_path is not None:
-            required.add("character_sheet")
+        if reference_path is not None:
+            required.add("reference_image")
         mapping = self._load_mapping(template, required)
         source_name = self._upload_image(source_path)
         values: dict[str, Any] = {
@@ -285,14 +292,21 @@ class ComfyClient:
             values["width"] = int(payload["width"])
         if "height" in mapping:
             values["height"] = int(payload["height"])
-        if character_sheet_path is not None:
-            values["character_sheet"] = self._upload_image(character_sheet_path)
-        elif "character_sheet" in mapping:
-            # An always-on two-image export otherwise keeps its sample placeholder.
-            # Repeating the source is neutral and prevents unrelated reference leakage.
-            values["character_sheet"] = source_name
-        return self._run(
+        if reference_path is not None:
+            values["reference_image"] = self._upload_image(reference_path)
+        result = self._run(
             template, {**payload, "patches": self._mapped_patches(mapping, values)}, output_dir
+        )
+        references = [
+            {"role": "source", "path": str(source_path)},
+            *(
+                [{"role": "canonical", "path": str(reference_path)}]
+                if reference_path is not None else []
+            ),
+        ]
+        return GenerationResult(
+            files=result.files,
+            metadata={**result.metadata, "prompt": prompt, "references": references},
         )
 
     def _generate_multiref_image(
@@ -392,7 +406,7 @@ class ComfyClient:
             "prop": "One isolated prop only, no people or hands, clean readable silhouette.",
             "style": "A clean style exemplar with a coherent palette, materials and lighting language.",
         }.get(role, "One clean reusable visual reference.")
-        references = list(payload.get("reference_frames", []))[:4]
+        references = list(payload.get("reference_frames", []))[:2]
         visual_lock = (
             "Use the supplied source evidence images as the primary visual truth for identity, "
             "shape, wardrobe, architecture, palette, materials, and lighting. Extract only the "
@@ -407,9 +421,13 @@ class ComfyClient:
             f"{payload.get('project_id', 'project')}-{payload.get('asset_key', role)}"
         )
         if references:
-            result = self._generate_multiref_image(
+            result = self._generate_edit_image(
                 output_dir / "run", payload, prompt=prompt, seed=int(payload["seed"]),
-                references=references, output_prefix=output_prefix,
+                source_path=Path(references[0]["path"]),
+                reference_path=(
+                    Path(references[1]["path"]) if len(references) == 2 else None
+                ),
+                output_prefix=output_prefix,
             )
         else:
             result = self._generate_t2i_image(
@@ -446,7 +464,7 @@ class ComfyClient:
             self._load_template(template)
         spec = payload["spec"]
         mode = payload.get("generation_mode", "anchor")
-        candidates = int(payload.get("candidates", 2))
+        candidates = int(payload.get("candidates", 1))
         base_seed = int(payload["seed"])
         style = str(payload.get("visual_style", "")).strip()
         style_directive = self._style_directive(payload)
@@ -456,13 +474,13 @@ class ComfyClient:
         if resolved_negative is None:
             resolved_negative = ", ".join(filter(None, negative_parts))
         common = {**payload, "negative_prompt": resolved_negative}
-        canonical = list(payload.get("canonical_references", []))[:4]
+        canonical = list(payload.get("canonical_references", []))[:2]
         opening_canonical = list(
             payload.get("opening_canonical_references", canonical)
-        )[:4]
+        )[:1]
         closing_canonical = list(
             payload.get("closing_canonical_references", canonical)
-        )[:3]
+        )[:1]
         legacy_sheet = (
             Path(payload["character_sheet_path"])
             if payload.get("character_sheet_path") else None
@@ -502,10 +520,11 @@ class ComfyClient:
                     f"{spec.get('safe_area', '')}"
                 )
                 if opening_canonical:
-                    start_result = self._generate_multiref_image(
+                    start_result = self._generate_edit_image(
                         output_dir / f"candidate-{candidate}-start-run", common,
                         prompt=start_prompt, seed=base_seed + candidate * 10,
-                        references=opening_canonical,
+                        source_path=Path(opening_canonical[0]["path"]),
+                        reference_path=None,
                         output_prefix=f"{payload['scene_id']}-c{candidate}-start",
                     )
                 else:
@@ -547,20 +566,16 @@ class ComfyClient:
                 f"lock changes. Closing environment lock: {spec.get('closing_environment_key') or spec.get('opening_environment_key') or spec.get('environment_key') or 'unspecified'}. "
                 "No duplicate or hybrid characters, no collage, and no additional people."
             )
-            if opening_canonical or closing_canonical:
-                end_result = self._generate_multiref_image(
-                    output_dir / f"candidate-{candidate}-end-run", common,
-                    prompt=end_prompt, seed=base_seed + candidate * 10 + 1,
-                    references=end_references,
-                    output_prefix=f"{payload['scene_id']}-c{candidate}-end",
-                )
-            else:
-                end_result = self._generate_edit_image(
-                    output_dir / f"candidate-{candidate}-end-run", common,
-                    prompt=end_prompt, seed=base_seed + candidate * 10 + 1,
-                    source_path=start_path, character_sheet_path=legacy_sheet,
-                    output_prefix=f"{payload['scene_id']}-c{candidate}-end",
-                )
+            selected_reference = (
+                Path(closing_canonical[0]["path"])
+                if closing_canonical else legacy_sheet
+            )
+            end_result = self._generate_edit_image(
+                output_dir / f"candidate-{candidate}-end-run", common,
+                prompt=end_prompt, seed=base_seed + candidate * 10 + 1,
+                source_path=start_path, reference_path=selected_reference,
+                output_prefix=f"{payload['scene_id']}-c{candidate}-end",
+            )
             end_path = self._move_first(
                 end_result, output_dir / f"candidate-{candidate}-end"
             )

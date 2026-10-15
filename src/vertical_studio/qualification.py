@@ -126,6 +126,7 @@ class QualificationService:
 
         required = [
             self.settings.workflows_dir / "flux_t2i_api.json",
+            self.settings.workflows_dir / "image_flux2_klein_image_edit_4b_distilled_api.json",
             self.settings.workflows_dir / "flux_edit_api.json",
             self.settings.workflows_dir / "wan14b_lightx2v_flf2v_api.json",
         ]
@@ -144,11 +145,18 @@ class QualificationService:
             )
         payloads = json.loads(payload_path.read_text())
         flux_t2i_payload = payloads.get("flux_t2i") or payloads.get("flux")
+        flux_edit_single_payload = payloads.get("flux_edit_single")
         flux_edit_payload = payloads.get("flux_edit")
         wan_payloads = payloads.get("wan_candidates", [])
-        if not isinstance(flux_t2i_payload, dict) or not isinstance(flux_edit_payload, dict) or not wan_payloads:
+        if (
+            not isinstance(flux_t2i_payload, dict)
+            or not isinstance(flux_edit_single_payload, dict)
+            or not isinstance(flux_edit_payload, dict)
+            or not wan_payloads
+        ):
             raise QualificationError(
-                "qualification_payloads.json must contain flux_t2i, flux_edit and wan_candidates"
+                "qualification_payloads.json must contain flux_t2i, flux_edit_single, "
+                "flux_edit and wan_candidates"
             )
         if level == "full" and len(wan_payloads) < len(self.CANDIDATES):
             raise QualificationError(
@@ -164,6 +172,12 @@ class QualificationService:
         try:
             report["runs"].append(
                 self._run_flux(generator, flux_t2i_payload, run_dir / "flux-t2i", "flux_t2i")
+            )
+            report["runs"].append(
+                self._run_flux(
+                    generator, flux_edit_single_payload,
+                    run_dir / "flux-edit-single", "flux_edit_single",
+                )
             )
             report["runs"].append(
                 self._run_flux(generator, flux_edit_payload, run_dir / "flux-edit", "flux_edit")

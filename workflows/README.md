@@ -3,7 +3,8 @@
 Files in the repository root are the original ComfyUI UI graphs and remain unchanged. Real execution requires API-format exports:
 
 - `flux_t2i_api.json`
-- `flux_edit_api.json`
+- `image_flux2_klein_image_edit_4b_distilled_api.json` (one reference)
+- `flux_edit_api.json` (two references)
 - `wan14b_lightx2v_flf2v_api.json`
 - Optional explicit fallback: `wan5b_flf2v_api.json`
 
@@ -31,25 +32,24 @@ Copy `workflow_maps.example.json` to `workflow_maps.json` and replace every plac
 }
 ```
 
-Copy `qualification_payloads.example.json` to `qualification_payloads.json` only after verifying the exact node IDs on the final ComfyUI/custom-node commits. It must define the Flux smoke payload and each Wan candidate's prompt, seed, dimensions, frame count, input-image nodes and output nodes. This file is machine/revision-specific and must be reviewed before a real qualification command.
+Copy `qualification_payloads.example.json` to `qualification_payloads.json` only after verifying the exact node IDs on the final ComfyUI/custom-node commits. It must define the T2I, one-reference Edit, two-reference Edit, and Wan smoke payloads, including prompts, seeds, dimensions, input-image nodes and output nodes. This file is machine/revision-specific and must be reviewed before a real qualification command.
 
 Templates and profiles remain `unqualified` until an explicitly confirmed target-machine run records the driver, GPU, versions, model hashes, peak memory, duration, output metadata and any recovery actions.
 
 
 ## Continuity-chain image contract
 
-`flux_t2i_api` creates optional character sheets and the first anchor frame of each
-continuity group. `flux_edit_api` creates every connected end frame and must expose
-the previous-frame input plus the optional character-sheet input in `workflow_maps.json`:
+Text-only assets and anchors use `flux_t2i_api`. Reference-derived canonical assets and
+keyframes use FLUX Edit with no more than two distinct images:
 
-- `source_image`: the immediately preceding frame.
-- `character_sheet`: the persistent identity reference when Qwen requires one.
+- `source_image`: source evidence, the opening frame, or the immediately preceding frame.
+- `reference_image`: one optional canonical character or environment reference.
+
+The one-reference template is selected when no second image is needed. The two-reference
+`flux_edit_api` is selected only when `reference_image` is present, so sample placeholders
+and duplicate references cannot leak into generation. For a stable location the primary
+character is preferred; for a location transition the destination environment is preferred.
 
 The project `visual_style` is injected into character-sheet, T2I, Flux Edit and Wan
 prompts. Stylized projects also add photorealism/live-action terms to negative prompts.
-When a two-image edit template is always enabled but Qwen does not request a character
-sheet, the application repeats `source_image` in that slot so a sample placeholder can
-never leak into generation. A single-input edit template also remains valid.
-
-The application uploads and patches these inputs deterministically. At a continuity
-break it creates a new T2I anchor instead of passing unrelated frames to Flux Edit or Wan.
+The application uploads and patches every reference deterministically.

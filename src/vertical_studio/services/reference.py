@@ -52,7 +52,7 @@ class ReferenceAnalyzer:
                 "cut, location change, time jump, or radical composition change. Use only known "
                 "canonical asset keys in scene references. Preserve source evidence rather than "
                 "inventing unsupported details. Frames are numbered in chronological order starting "
-                "at 1. For every canonical asset, set evidence_frame_indices to the 1-4 frame numbers "
+                "at 1. For every canonical asset, set evidence_frame_indices to the 1-2 frame numbers "
                 "that most clearly show that specific asset. Never cite a frame that does not visibly "
                 "support the asset. Keep every non-prompt string under 25 words and every canonical "
                 "asset prompt under 70 words. Do not repeat facts across fields or add redundant list "
@@ -109,10 +109,8 @@ class ReferenceAnalyzer:
         )
         evidence_indices = list(dict.fromkeys([
             1,
-            max(1, len(frames) // 3),
-            max(1, (2 * len(frames)) // 3),
             len(frames),
-        ]))[:4]
+        ]))[:2]
         assets = [
             CanonicalAssetSpec(
                 key="protagonist",

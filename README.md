@@ -267,13 +267,13 @@ rsync -av "$HOME/.local/share/vertical-video-studio/" \
 ## Continuity-aware keyframe chains
 
 Qwen marks each storyboard scene with a continuity group and decides whether the
-project needs a character sheet. After storyboard approval, the image stage is
-deterministic:
+project needs a character sheet. After storyboard approval, the image stage generates one start/end pair per scene;
+a retry explicitly requests another pair:
 
-1. Generate the optional character sheet with Flux T2I.
-2. Generate the first frame of each continuity group with Flux T2I.
-3. Generate every connected end frame with Flux Edit, using the immediately
-   previous frame and the character sheet when required.
+1. Generate text-only canonical references with Flux T2I; reference-derived assets use Flux Edit.
+2. Generate a fresh anchor with T2I when no image reference is needed, otherwise use one-reference Flux Edit.
+3. Generate every connected end frame with Flux Edit using the exact opening/previous frame
+   plus at most one selected canonical character or environment image.
 4. Reuse each exact end-frame file as the next connected scene's start frame.
 5. Wait until all keyframe pairs are approved, unload Flux, then queue Wan for
    `F1 -> F2`, `F2 -> F3`, and so on.
@@ -283,8 +283,9 @@ the character-sheet, T2I, Flux Edit and Wan prompts; stylized projects explicitl
 reject photorealistic and live-action drift.
 
 A new location, main character, time jump, radical composition, or deliberate cut
-starts a new continuity group and therefore a fresh T2I anchor. Real execution
-requires both `flux_t2i_api.json` and `flux_edit_api.json`; see
+starts a new continuity group and therefore a fresh T2I or one-reference Edit anchor.
+Real execution requires `flux_t2i_api.json`, the one-reference Edit export, and
+`flux_edit_api.json`; see
 [workflows/README.md](workflows/README.md) for the two-reference Flux Edit map.
 
 ## Automatic GPU sharing with Qwen

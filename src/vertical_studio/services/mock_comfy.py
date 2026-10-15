@@ -60,7 +60,7 @@ class MockComfyClient:
         output_dir.mkdir(parents=True, exist_ok=True)
         width = int(payload.get("width", 384))
         height = int(payload.get("height", 672))
-        candidates = int(payload.get("candidates", 2))
+        candidates = int(payload.get("candidates", 1))
         scene_id = str(payload.get("scene_id", "scene"))
         files: list[Path] = []
         mode = payload.get("generation_mode", "anchor")

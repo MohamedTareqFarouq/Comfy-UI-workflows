@@ -32,6 +32,21 @@
       }
     ]
   },
+  "flux_edit_single": {
+    "template": "image_flux2_klein_image_edit_4b_distilled_api",
+    "patches": [
+      {
+        "node_id": "REPLACE",
+        "input": "text",
+        "value": "qualification single-reference edit"
+      },
+      {
+        "node_id": "REPLACE",
+        "input": "image",
+        "value": "QUALIFICATION_SOURCE_IMAGE"
+      }
+    ]
+  },
   "flux_edit": {
     "template": "flux_edit_api",
     "patches": [
@@ -48,7 +63,7 @@
       {
         "node_id": "REPLACE",
         "input": "image",
-        "value": "QUALIFICATION_CHARACTER_SHEET"
+        "value": "QUALIFICATION_CANONICAL_REFERENCE"
       }
     ]
   }

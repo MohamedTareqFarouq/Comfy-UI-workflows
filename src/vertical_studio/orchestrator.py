@@ -311,9 +311,10 @@ class Orchestrator:
                             "the closing frame. Use the same lock when the background does not change. For a room transition, "
                             "use different opening and closing locks and make the compositions explicitly match those rooms. "
                             "A connected scene's opening environment must equal the previous scene's closing environment. "
-                            "Never allow a kitchen reference in a dining-room-only endpoint. Because the closing endpoint has "
-                            "one opening-frame slot plus only three canonical-reference slots, split any location transition "
-                            "that would require more than two characters plus the new environment. Also provide "
+                            "Never allow a kitchen reference in a dining-room-only endpoint. FLUX Edit accepts at most "
+                            "the exact opening/continuity frame plus one selected canonical character or environment image. "
+                            "For a stable location prefer the primary character reference; for a location transition prefer "
+                            "the destination environment reference. Other asset keys remain descriptive metadata. Also provide "
                             "character_count, opening_state, closing_state, object_owner and handoff_to_next_scene. For every "
                             "scene, describe both its opening keyframe in "
                             "start_composition and its closing keyframe in end_composition, plus "
@@ -508,13 +509,13 @@ class Orchestrator:
                 )
                 requested = list(dict.fromkeys(
                     asset_blueprint.get("evidence_frame_indices", [])
-                ))[:4]
+                ))[:2]
                 selected = [
                     index for index in requested
                     if isinstance(index, int) and 1 <= index <= len(evidence_ids)
                 ]
                 if not selected and evidence_ids:
-                    count = min(4, len(evidence_ids))
+                    count = min(2, len(evidence_ids))
                     selected = (
                         [1] if count == 1 else [
                             round(offset * (len(evidence_ids) - 1) / (count - 1)) + 1
@@ -542,7 +543,8 @@ class Orchestrator:
             "width": 720,
             "height": 1280,
             "template": "flux_t2i_api",
-            "multiref_template_prefix": "flux_klein_multiref",
+            "single_edit_template": "image_flux2_klein_image_edit_4b_distilled_api",
+            "edit_template": "flux_edit_api",
             "reference_frames": reference_frames,
             "generation_round": len(prior) + 1,
         }
@@ -675,10 +677,11 @@ class Orchestrator:
         prior = [j for j in self.db.list_jobs(scene.project_id) if j.scene_id == scene.id and j.kind == JobKind.KEYFRAME]
         payload = {"scene_id": scene.id, "scene_revision": scene.revision, "spec": scene.spec.model_dump(),
                    "visual_style": project.visual_style,
-                   "candidates": 2, "width": 384, "height": 672,
+                   "candidates": 1, "width": 384, "height": 672,
                    "generation_mode": "anchor" if scene.spec.starts_new_continuity else "continuation",
                    "t2i_template": "flux_t2i_api",
-                   "multiref_template_prefix": "flux_klein_multiref",
+                   "single_edit_template": "image_flux2_klein_image_edit_4b_distilled_api",
+                   "edit_template": "flux_edit_api",
                    "generation_round": len(prior) + 1,
                    "start_prompt_override": retry.changed_start_prompt if retry else None,
                    "end_prompt_override": retry.changed_end_prompt if retry else None,

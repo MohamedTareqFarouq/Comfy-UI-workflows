@@ -506,7 +506,7 @@ function renderDetail(){
           <span class="badge ${scene.state==="approved"?"ok":""}">${scene.state.replaceAll("_"," ")}</span>
         </div>
         <div class="continuity-meta">
-          <span>${scene.spec.starts_new_continuity?"Multi-reference anchor":"Exact prior-frame continuation"}</span>
+          <span>${scene.spec.starts_new_continuity?"Flux Edit reference anchor":"Exact prior-frame continuation"}</span>
           <span>Group: ${esc(scene.spec.continuity_group)}</span>
           <span>${esc(scene.spec.transition_from_previous.replaceAll("_"," "))}</span>
           <span>Environment: ${esc(scene.spec.opening_environment_key||scene.spec.environment_key||"unlocked")} → ${esc(scene.spec.closing_environment_key||scene.spec.opening_environment_key||scene.spec.environment_key||"unlocked")}</span>
