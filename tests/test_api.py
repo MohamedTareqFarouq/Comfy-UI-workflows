@@ -188,3 +188,37 @@ def test_reference_video_becomes_reviewable_storyboard(
             <= evidence_ids
             for job in jobs
         )
+
+        asset_id = detail["canonical_assets"][0]["id"]
+        selector = client.get(
+            f"/api/canonical-assets/{asset_id}/retry-prompt"
+        )
+        assert selector.status_code == 200
+        bundle = selector.json()
+        assert len(bundle["evidence_frames"]) == 8
+        assert 1 <= len(bundle["selected_reference_artifact_ids"]) <= 2
+        chosen = [frame["artifact_id"] for frame in bundle["evidence_frames"][-2:]]
+        retried = client.post(
+            f"/api/canonical-assets/{asset_id}/retry",
+            json={
+                "prompt": bundle["prompt"],
+                "feedback": "Use the selected source views",
+                "reference_artifact_ids": chosen,
+            },
+        )
+        assert retried.status_code == 200
+        assert [
+            frame["artifact_id"]
+            for frame in retried.json()["payload"]["reference_frames"]
+        ] == chosen
+
+        text_only = client.post(
+            f"/api/canonical-assets/{asset_id}/retry",
+            json={
+                "prompt": bundle["prompt"],
+                "feedback": "Generate without source-frame conditioning",
+                "reference_artifact_ids": [],
+            },
+        )
+        assert text_only.status_code == 200
+        assert text_only.json()["payload"]["reference_frames"] == []

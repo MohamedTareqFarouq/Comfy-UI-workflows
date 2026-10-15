@@ -567,18 +567,30 @@ function renderDetail(){
       <span>${canonical_assets.filter(asset=>asset.approved).length}/${canonical_assets.length} approved</span></div>
       <div class="canonical-grid">${canonical_assets.map(asset=>{
         const artifact=artifacts.find(item=>item.id===asset.artifact_id);
-        const activeJob=[...jobs].reverse().find(job=>
-          job.kind==="canonical_asset"&&job.payload?.canonical_asset_id===asset.id&&
+        const assetJobs=jobs.filter(job=>
+          job.kind==="canonical_asset"&&job.payload?.canonical_asset_id===asset.id
+        );
+        const latestJob=assetJobs.at(-1);
+        const activeJob=[...assetJobs].reverse().find(job=>
           ["queued","running"].includes(job.state)
         );
-        const referenceAction=project.state==="references"&&!asset.approved&&!activeJob
-          ?`<button data-retry-reference="${asset.id}">Edit & regenerate</button>`
+        const usedReferences=latestJob?.payload?.reference_frames||[];
+        const usedReferenceHtml=latestJob?`<div class="canonical-used-references">
+          <b>Source frames used</b>${usedReferences.length?`<div>${usedReferences.map((reference,index)=>`
+            <a href="/api/artifacts/${encodeURIComponent(reference.artifact_id)}/content"
+              target="_blank" rel="noopener noreferrer" title="${esc(reference.label||"Reference "+(index+1))}">
+              <img src="/api/artifacts/${encodeURIComponent(reference.artifact_id)}/content"
+                alt="${esc(reference.label||"Reference "+(index+1))}"><small>${index+1}</small></a>`).join("")}</div>`
+            :`<small>None — text-only FLUX T2I</small>`}
+        </div>`:"";
+        const referenceAction=project.state==="references"&&!asset.approved
+          ?`<button data-retry-reference="${asset.id}">${activeJob?"Change references & restart":"References & regenerate"}</button>`
           :"";
         return `<article class="canonical-card">
           ${artifact?`<img src="/api/artifacts/${artifact.id}/content" alt="${esc(asset.label)}">`:`<div class="reference-placeholder">${activeJob?"Generating...":"Not generated"}</div>`}
           <div><span class="badge">${esc(asset.role)}</span><h3>${esc(asset.label)}</h3>
           <p>${esc(asset.description||asset.prompt)}</p><small>${esc(asset.key)}</small>
-          <div class="card-actions">${referenceAction}</div></div>
+          ${usedReferenceHtml}<div class="card-actions">${referenceAction}</div></div>
         </article>`;
       }).join("")}</div>
     </section>
@@ -718,7 +730,10 @@ async function openGuidedRetry(sceneId,stage,trigger=null){
   q("#retry-end-field").hidden=stage!=="keyframe";
   q("#retry-video-field").hidden=stage!=="video";
   q("#retry-reference-field").hidden=true;
+  q("#retry-reference-images-field").hidden=true;
+  q("#retry-reference-images").innerHTML="";
   q("#retry-negative-field").hidden=false;
+  form.elements.feedback.required=true;
   q("#retry-title").textContent=stage==="keyframe"?"Revise Flux keyframe prompts":"Revise Wan video prompt";
   q("#retry-description").textContent=stage==="keyframe"
     ?"Describe what is wrong with this scene's keyframes. Qwen will revise only the Flux prompts."
@@ -764,17 +779,46 @@ async function openCanonicalRetry(assetId,trigger=null){
   q("#retry-end-field").hidden=true;
   q("#retry-video-field").hidden=true;
   q("#retry-reference-field").hidden=false;
+  q("#retry-reference-images-field").hidden=true;
+  q("#retry-reference-images").innerHTML="";
   q("#retry-negative-field").hidden=true;
-  q("#retry-title").textContent="Revise canonical reference prompt";
-  q("#retry-description").textContent="Describe what is wrong with this reference. Qwen will revise only this asset prompt.";
+  form.elements.feedback.required=false;
+  q("#retry-title").textContent="Choose source frames and regenerate";
+  q("#retry-description").textContent="Verify the exact evidence frames used for this asset. Choose up to two, or clear both for text-only FLUX T2I.";
   q("#retry-rationale").hidden=true;
   setRetryStatus("Loading the current reference prompt...");
   if(!dialog.open)dialog.showModal();
   try{
     const bundle=await api("/api/canonical-assets/"+assetId+"/retry-prompt");
     form.elements.reference_prompt.value=bundle.prompt||"";
-    setRetryStatus("Prompt loaded. Add feedback, then ask Qwen to revise.","ready");
+    const frames=bundle.evidence_frames||[];
+    const selected=new Set(bundle.selected_reference_artifact_ids||[]);
+    const selector=q("#retry-reference-images");
+    selector.innerHTML=frames.map(frame=>`<label class="reference-selector ${frame.selected?"selected":""}">
+      <input type="checkbox" name="reference_artifact_ids" value="${esc(frame.artifact_id)}"
+        ${selected.has(frame.artifact_id)?"checked":""}>
+      <img src="/api/artifacts/${encodeURIComponent(frame.artifact_id)}/content"
+        alt="${esc(frame.label)}"><span>${esc(frame.label)}</span></label>`).join("");
+    q("#retry-reference-images-field").hidden=!frames.length;
+    selector.onchange=event=>{
+      const checked=[...selector.querySelectorAll('input:checked')];
+      if(checked.length>2){
+        event.target.checked=false;
+        event.target.closest(".reference-selector")?.classList.remove("selected");
+        toast("Choose no more than two source frames");
+        return;
+      }
+      event.target.closest(".reference-selector")?.classList.toggle("selected",event.target.checked);
+    };
+    form.dataset.revised="true";
+    setRetryStatus(
+      frames.length
+        ?"References loaded. Choose zero, one, or two frames, then regenerate. Prompt revision is optional."
+        :"No extracted source frames are available for this text-only asset.",
+      "ready"
+    );
     reviseButton.disabled=false;
+    submitButton.disabled=false;
   }catch(error){
     setRetryStatus(error.message,"error");
     toast(error.message);
@@ -788,6 +832,10 @@ async function reviseGuidedRetry(){
   const form=q("#retry-form");
   if(form.dataset.busy==="true"||!form.reportValidity())return;
   const stage=form.elements.stage.value;
+  if(stage==="reference"&&form.elements.feedback.value.trim().length<2){
+    setRetryStatus("Add a short correction before asking Qwen to revise the prompt.","error");
+    return;
+  }
   const button=q("#revise-retry-prompts");
   const submitButton=form.querySelector('[type="submit"]');
   const original=button.textContent;
@@ -929,17 +977,22 @@ document.querySelector("[data-retry-close]").onclick=()=>q("#retry-dialog").clos
 q("#retry-form").onsubmit=async event=>{
   event.preventDefault();
   const form=event.currentTarget;
-  if(form.dataset.revised!=="true"||form.dataset.busy==="true")return;
+  if(form.dataset.busy==="true")return;
+  if(form.elements.stage.value!=="reference"&&form.dataset.revised!=="true")return;
   const sceneId=form.elements.scene_id.value;
   const assetId=form.elements.asset_id.value;
   const stage=form.elements.stage.value;
   const submitButton=form.querySelector('[type="submit"]');
   const reviseButton=q("#revise-retry-prompts");
   const original=submitButton.textContent;
+  const selectedReferenceIds=stage==="reference"
+    ?[...q("#retry-reference-images").querySelectorAll('input:checked')].map(input=>input.value)
+    :[];
   const body=stage==="reference"?{
     prompt:form.elements.reference_prompt.value,
     feedback:form.elements.feedback.value,
-    revision_rationale:form.elements.revision_rationale.value
+    revision_rationale:form.elements.revision_rationale.value,
+    reference_artifact_ids:q("#retry-reference-images-field").hidden?null:selectedReferenceIds
   }:{
     changed_negative_prompt:form.elements.negative_prompt.value,
     feedback:form.elements.feedback.value,

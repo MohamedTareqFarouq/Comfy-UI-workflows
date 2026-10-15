@@ -481,7 +481,62 @@ class Orchestrator:
             return [self.queue_canonical_asset(asset.id) for asset in assets]
         return [self.queue_keyframes(scene.id) for scene in self.db.list_scenes(project_id)]
 
-    def queue_canonical_asset(self, asset_id: str) -> Job:
+    def _canonical_evidence_catalog(self, asset: Any) -> list[dict[str, Any]]:
+        project = self.db.get_project(asset.project_id)
+        if project.source_mode != SourceMode.REFERENCE:
+            return []
+        analysis = self.db.get_reference_analysis(project.id)
+        if not analysis or not analysis["approved"]:
+            return []
+        catalog = []
+        for order, artifact_id in enumerate(
+            analysis["trace"].get("evidence_artifact_ids", []), 1
+        ):
+            artifact = self.db.get_artifact(artifact_id)
+            catalog.append({
+                "artifact_id": artifact.id,
+                "key": f"evidence_frame_{order}",
+                "role": "source_evidence",
+                "label": f"source evidence frame {order}",
+                "order": order,
+                "path": artifact.path,
+            })
+        return catalog
+
+    def _default_canonical_evidence_ids(
+        self, asset: Any, catalog: list[dict[str, Any]]
+    ) -> list[str]:
+        analysis = self.db.get_reference_analysis(asset.project_id)
+        if not analysis:
+            return []
+        blueprint_asset = next(
+            (
+                item for item in analysis["blueprint"].get("canonical_assets", [])
+                if item.get("key") == asset.key
+            ),
+            {},
+        )
+        requested = list(dict.fromkeys(
+            blueprint_asset.get("evidence_frame_indices", [])
+        ))[:2]
+        selected = [
+            catalog[index - 1]["artifact_id"] for index in requested
+            if isinstance(index, int) and 1 <= index <= len(catalog)
+        ]
+        if selected or not catalog:
+            return selected
+        count = min(2, len(catalog))
+        indices = (
+            [0] if count == 1 else [
+                round(offset * (len(catalog) - 1) / (count - 1))
+                for offset in range(count)
+            ]
+        )
+        return [catalog[index]["artifact_id"] for index in indices]
+
+    def queue_canonical_asset(
+        self, asset_id: str, reference_artifact_ids: list[str] | None = None
+    ) -> Job:
         asset = self.db.get_canonical_asset(asset_id)
         project = self.db.get_project(asset.project_id)
         prior = [
@@ -495,42 +550,20 @@ class Orchestrator:
         )
         if active:
             return active
-        reference_frames: list[dict[str, Any]] = []
-        if project.source_mode == SourceMode.REFERENCE:
-            analysis = self.db.get_reference_analysis(project.id)
-            if analysis and analysis["approved"]:
-                evidence_ids = analysis["trace"].get("evidence_artifact_ids", [])
-                asset_blueprint = next(
-                    (
-                        item for item in analysis["blueprint"].get("canonical_assets", [])
-                        if item.get("key") == asset.key
-                    ),
-                    {},
-                )
-                requested = list(dict.fromkeys(
-                    asset_blueprint.get("evidence_frame_indices", [])
-                ))[:2]
-                selected = [
-                    index for index in requested
-                    if isinstance(index, int) and 1 <= index <= len(evidence_ids)
-                ]
-                if not selected and evidence_ids:
-                    count = min(2, len(evidence_ids))
-                    selected = (
-                        [1] if count == 1 else [
-                            round(offset * (len(evidence_ids) - 1) / (count - 1)) + 1
-                            for offset in range(count)
-                        ]
-                    )
-                for index in selected:
-                    artifact = self.db.get_artifact(evidence_ids[index - 1])
-                    reference_frames.append({
-                        "artifact_id": artifact.id,
-                        "key": f"evidence_frame_{index}",
-                        "role": "source_evidence",
-                        "label": f"source evidence frame {index}",
-                        "path": artifact.path,
-                    })
+
+        catalog = self._canonical_evidence_catalog(asset)
+        selected_ids = (
+            list(dict.fromkeys(reference_artifact_ids))
+            if reference_artifact_ids is not None
+            else self._default_canonical_evidence_ids(asset, catalog)
+        )
+        if len(selected_ids) > 2:
+            raise ValueError("canonical asset generation accepts at most two reference frames")
+        allowed = {item["artifact_id"]: item for item in catalog}
+        invalid = [artifact_id for artifact_id in selected_ids if artifact_id not in allowed]
+        if invalid:
+            raise ValueError("selected references must be extracted evidence frames from this project")
+        reference_frames = [allowed[artifact_id] for artifact_id in selected_ids]
 
         payload = {
             "canonical_asset_id": asset.id,
@@ -553,17 +586,45 @@ class Orchestrator:
             stable_key("canonical_asset", asset.id, payload["generation_round"], payload), payload,
         )
 
-    def get_canonical_asset_retry_prompt(self, asset_id: str) -> dict[str, str]:
+    def get_canonical_asset_retry_prompt(self, asset_id: str) -> dict[str, Any]:
         asset = self.db.get_canonical_asset(asset_id)
         project = self.db.get_project(asset.project_id)
         if project.state != ProjectState.REFERENCES or asset.approved:
             raise ValueError("canonical references can only be edited during reference review")
+        catalog = self._canonical_evidence_catalog(asset)
+        latest_job = next(
+            (
+                job for job in reversed(self.db.list_jobs(project.id))
+                if job.kind == JobKind.CANONICAL_ASSET
+                and job.payload.get("canonical_asset_id") == asset.id
+            ),
+            None,
+        )
+        selected_ids = (
+            [
+                frame["artifact_id"]
+                for frame in latest_job.payload.get("reference_frames", [])
+                if frame.get("artifact_id")
+            ]
+            if latest_job else self._default_canonical_evidence_ids(asset, catalog)
+        )
+        selected = set(selected_ids)
         return {
             "asset_id": asset.id,
             "role": asset.role,
             "label": asset.label,
             "prompt": asset.prompt,
             "description": asset.description,
+            "selected_reference_artifact_ids": selected_ids,
+            "evidence_frames": [
+                {
+                    "artifact_id": item["artifact_id"],
+                    "label": item["label"],
+                    "order": item["order"],
+                    "selected": item["artifact_id"] in selected,
+                }
+                for item in catalog
+            ],
         }
 
     def revise_canonical_asset_prompt(
@@ -623,7 +684,9 @@ class Orchestrator:
         )
         if interrupted:
             self.gpu.generator.interrupt()
-        return self.queue_canonical_asset(asset_id)
+        return self.queue_canonical_asset(
+            asset_id, reference_artifact_ids=request.reference_artifact_ids
+        )
 
     def approve_canonical_assets(
         self, project_id: str, request: ApprovalRequest

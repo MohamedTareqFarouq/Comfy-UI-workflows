@@ -629,6 +629,9 @@ class CanonicalAssetRetryRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=8000)
     feedback: str = Field(default="", max_length=4000)
     revision_rationale: str = Field(default="", max_length=2000)
+    reference_artifact_ids: list[str] | None = Field(
+        default=None, max_length=2
+    )
 
 
 class RetryRequest(BaseModel):
