@@ -20,6 +20,29 @@ def test_components_can_start_and_report_background_worker(components) -> None:
     assert components.worker_alive is True
     components.stop()
     assert components.worker_alive is False
+    assert components.ensure_worker() is True
+    assert components.worker_alive is True
+
+
+def test_comfy_interrupt_is_scoped_to_the_active_prompt(
+    monkeypatch, tmp_path: Path
+) -> None:
+    client = ComfyClient("http://127.0.0.1:8188", tmp_path)
+    calls: list[tuple[str, dict | None]] = []
+
+    def fake_post(url: str, *, json: dict | None = None, timeout: int):
+        calls.append((url, json))
+
+    monkeypatch.setattr("vertical_studio.services.comfy.httpx.post", fake_post)
+    client.interrupt()
+    assert calls == []
+
+    client._active_prompt_id = "prompt-123"
+    client.interrupt()
+    assert calls == [
+        ("http://127.0.0.1:8188/interrupt", {"prompt_id": "prompt-123"})
+    ]
+    assert client._active_prompt_id is None
 
 
 def test_invalid_state_transitions_are_rejected() -> None:

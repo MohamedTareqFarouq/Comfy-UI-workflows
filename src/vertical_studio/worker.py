@@ -60,6 +60,9 @@ class Worker:
             completed.append(result)
         return completed
 
+    def prepare_to_serve(self) -> None:
+        self._stop.clear()
+
     def serve(self, poll_seconds: float = .5) -> None:
         while not self._stop.is_set():
             try:

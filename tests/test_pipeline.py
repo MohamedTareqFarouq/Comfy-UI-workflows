@@ -422,6 +422,35 @@ def test_guided_keyframe_retry_requires_revision_then_persists_prompts(component
     assert attempt["parameters"]["end_prompt_override"] == proposal.end_prompt
 
 
+
+def test_cancelled_keyframe_job_can_retry_or_approve_existing_pair(components) -> None:
+    project = components.orchestrator.create_project(
+        ProjectCreate(idea="A courier pauses under one streetlight", duration_seconds=10)
+    )
+    components.orchestrator.plan_project(project.id)
+    approve_storyboard_and_references(components, project.id)
+    components.worker.run_until_idle()
+
+    scene = components.db.list_scenes(project.id)[0]
+    artifacts = components.db.list_artifacts(project.id, scene.id)
+    start = next(item for item in artifacts if item.metadata.get("role") == "start")
+    end = next(item for item in artifacts if item.metadata.get("role") == "end")
+
+    first_retry = components.orchestrator.regenerate_keyframes(scene.id)
+    components.db.cancel_project_jobs(project.id)
+    assert components.db.get_job(first_retry.id).state.value == "cancelled"
+
+    second_retry = components.orchestrator.regenerate_keyframes(scene.id)
+    assert second_retry.state.value == "queued"
+    components.db.cancel_project_jobs(project.id)
+
+    approved = components.orchestrator.approve_keyframes(
+        scene.id,
+        ArtifactSelection(start_artifact_id=start.id, end_artifact_id=end.id),
+        ApprovalRequest(approved=True),
+    )
+    assert approved.state == SceneState.KEYFRAMES_APPROVED
+
 def test_keyframe_regeneration_stops_and_rebuilds_connected_chain(components) -> None:
     project = components.orchestrator.create_project(
         ProjectCreate(idea="A recurring worker crosses one continuous platform", duration_seconds=10)

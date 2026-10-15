@@ -43,6 +43,7 @@ class ComfyClient:
         self.base_url = base_url.rstrip("/")
         self.workflow_dir = workflow_dir
         self.timeout = timeout
+        self._active_prompt_id: str | None = None
 
     def health(self) -> dict[str, Any]:
         try:
@@ -165,6 +166,7 @@ class ComfyClient:
             )
             response.raise_for_status()
             prompt_id = response.json()["prompt_id"]
+            self._active_prompt_id = prompt_id
         except (httpx.HTTPError, KeyError) as exc:
             if websocket is not None:
                 websocket.close()
@@ -239,6 +241,7 @@ class ComfyClient:
                 files.append(target)
         if not files:
             raise GenerationError("comfy_no_output", "ComfyUI completed without media output")
+        self._active_prompt_id = None
         return GenerationResult(files=files, metadata={"prompt_id": prompt_id, "history": history})
 
     def _generate_t2i_image(
@@ -718,10 +721,22 @@ class ComfyClient:
         )
 
     def interrupt(self) -> None:
+        # Never send an unscoped global interrupt. It can cancel an unrelated
+        # prompt and ComfyUI logs it as "Global interrupt (no prompt_id specified)".
+        prompt_id = self._active_prompt_id
+        if not prompt_id:
+            return
         try:
-            httpx.post(f"{self.base_url}/interrupt", timeout=10)
+            httpx.post(
+                f"{self.base_url}/interrupt",
+                json={"prompt_id": prompt_id},
+                timeout=10,
+            )
         except httpx.HTTPError:
             pass
+        finally:
+            if self._active_prompt_id == prompt_id:
+                self._active_prompt_id = None
 
     def free_memory(self) -> None:
         try:

@@ -1109,9 +1109,10 @@ class Orchestrator:
     ) -> Job:
         scene = self.db.get_scene(scene_id)
         if scene.state not in {
-            SceneState.KEYFRAMES_READY, SceneState.KEYFRAMES_APPROVED,
-            SceneState.VIDEO_QUEUED, SceneState.VIDEO_READY,
-            SceneState.QA_FAILED, SceneState.APPROVED,
+            SceneState.KEYFRAMES_QUEUED, SceneState.KEYFRAMES_READY,
+            SceneState.KEYFRAMES_APPROVED, SceneState.VIDEO_QUEUED,
+            SceneState.VIDEO_READY, SceneState.QA_FAILED,
+            SceneState.APPROVED, SceneState.FAILED,
         }:
             raise ValueError("scene keyframes are not ready to regenerate")
         self._reopen_scene_work(scene.project_id)
@@ -1122,7 +1123,17 @@ class Orchestrator:
 
     def approve_keyframes(self, scene_id: str, selection: ArtifactSelection, request: ApprovalRequest) -> Scene:
         scene = self.db.get_scene(scene_id)
-        if scene.state != SceneState.KEYFRAMES_READY: raise ValueError("keyframes are not ready")
+        reviewable = {
+            SceneState.KEYFRAMES_READY,
+            SceneState.KEYFRAMES_QUEUED,
+            SceneState.FAILED,
+        }
+        if scene.state not in reviewable:
+            raise ValueError("keyframes are not ready")
+        if scene.state != SceneState.KEYFRAMES_READY and self._active(
+            scene_id, JobKind.KEYFRAME
+        ):
+            raise ValueError("wait for or cancel the active keyframe job before approving")
         if not request.approved:
             self.db.record_approval(scene.project_id, "keyframes", False, request.notes, scene.id)
             self.queue_keyframes(scene.id)
@@ -1151,6 +1162,16 @@ class Orchestrator:
                 raise ValueError("approve the previous connected scene first")
             if selected_start.metadata.get("shared_from_artifact_id") != previous.selected_end_artifact_id:
                 raise ValueError("select the start frame that exactly matches the previous approved end frame")
+        if scene.state == SceneState.FAILED:
+            scene = self.db.transition_scene(
+                scene.id, SceneState.KEYFRAMES_QUEUED,
+                "recovering generated keyframes after a failed job",
+            )
+        if scene.state == SceneState.KEYFRAMES_QUEUED:
+            scene = self.db.transition_scene(
+                scene.id, SceneState.KEYFRAMES_READY,
+                "reviewing an existing pair after cancellation",
+            )
         self.db.record_approval(scene.project_id, "keyframes", True, request.notes, scene.id)
         self.db.select_artifacts(scene.id, start_id=selection.start_artifact_id, end_id=selection.end_artifact_id)
         scene = self.db.transition_scene(scene.id, SceneState.KEYFRAMES_APPROVED)

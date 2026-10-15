@@ -506,6 +506,17 @@ function renderDetail(){
           </button>
         `).join("")}<button data-retry-kf="${scene.id}">References & regenerate</button>`;
     }
+    const keyframeJobStopped=latestKeyframeJob&&
+      ["cancelled","failed"].includes(latestKeyframeJob.state);
+    if(["keyframes_queued","failed"].includes(scene.state)&&keyframeJobStopped){
+      controls=waitingForPrevious
+        ?`<small>Approve the previous connected scene first.</small>`
+        :`${pairs.map(pair=>`
+          <button data-kf="${scene.id}" data-start="${pair.start.id}" data-end="${pair.end.id}">
+            Approve existing pair
+          </button>
+        `).join("")}<button data-retry-kf="${scene.id}">References & retry</button>`;
+    }
     if(scene.state==="planned"&&scene.continuity_stale){
       controls='<small>Waiting for the regenerated previous scene to be approved.</small>';
     }
@@ -916,8 +927,8 @@ async function reviseGuidedRetry(){
   form.dataset.revised="false";
   button.disabled=true;
   submitButton.disabled=true;
-  button.textContent="Qwen is revising...";
-  setRetryStatus("Qwen is revising the selected prompts. Please wait - this can take a minute.");
+  button.textContent="Waiting for Qwen...";
+  setRetryStatus("Waiting for GPU access. Qwen will revise the selected prompts after active Comfy work releases the GPU.");
   try{
     const proposal=stage==="reference"
       ?await api(

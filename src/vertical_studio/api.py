@@ -70,6 +70,7 @@ class Components:
         with self._thread_lock:
             if self.worker_alive:
                 return True
+            self.worker.prepare_to_serve()
             self.thread = threading.Thread(
                 target=self.worker.serve,
                 daemon=True,
@@ -107,6 +108,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def fail(exc: Exception):
         if isinstance(exc, KeyError): raise HTTPException(404, str(exc))
         raise HTTPException(409, str(exc))
+
+    def wake_worker(result: Any) -> Any:
+        if not components.ensure_worker():
+            raise RuntimeError("the background worker could not be started")
+        return result
 
     @app.get("/api/status")
     def status() -> dict[str, Any]:
@@ -177,10 +183,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/projects/{project_id}/reference/analyze", status_code=202)
     def analyze_reference(project_id: str):
         try:
-            job = components.orchestrator.analyze_reference(project_id)
-            if not components.ensure_worker():
-                raise RuntimeError("the background worker could not be started")
-            return job
+            return wake_worker(
+                components.orchestrator.analyze_reference(project_id)
+            )
         except Exception as exc:
             fail(exc)
 
@@ -224,13 +229,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/projects/{project_id}/storyboard-approval")
     def storyboard_approval(project_id: str, request: ApprovalRequest):
-        try: return components.orchestrator.approve_storyboard(project_id, request)
+        try:
+            return wake_worker(
+                components.orchestrator.approve_storyboard(project_id, request)
+            )
         except Exception as exc: fail(exc)
 
     @app.post("/api/projects/{project_id}/canonical-assets-approval")
     def canonical_assets_approval(project_id: str, request: ApprovalRequest):
         try:
-            return components.orchestrator.approve_canonical_assets(project_id, request)
+            return wake_worker(
+                components.orchestrator.approve_canonical_assets(project_id, request)
+            )
         except Exception as exc:
             fail(exc)
 
@@ -253,13 +263,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/canonical-assets/{asset_id}/retry")
     def retry_canonical_asset(asset_id: str, request: CanonicalAssetRetryRequest):
         try:
-            return components.orchestrator.retry_canonical_asset(asset_id, request)
+            return wake_worker(
+                components.orchestrator.retry_canonical_asset(asset_id, request)
+            )
         except Exception as exc:
             fail(exc)
 
     @app.post("/api/scenes/{scene_id}/keyframe-approval")
     def keyframe_approval(scene_id: str, request: KeyframeApproval):
-        try: return components.orchestrator.approve_keyframes(scene_id, request.selection, request.approval)
+        try:
+            return wake_worker(
+                components.orchestrator.approve_keyframes(
+                    scene_id, request.selection, request.approval
+                )
+            )
         except Exception as exc: fail(exc)
 
     @app.get("/api/scenes/{scene_id}/retry-prompts/{stage}")
@@ -280,12 +297,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/scenes/{scene_id}/retry-keyframes")
     def retry_keyframes(scene_id: str, request: RetryRequest):
-        try: return components.orchestrator.regenerate_keyframes(scene_id, request)
+        try:
+            return wake_worker(
+                components.orchestrator.regenerate_keyframes(scene_id, request)
+            )
         except Exception as exc: fail(exc)
 
     @app.post("/api/scenes/{scene_id}/retry-video")
     def retry_video(scene_id: str, request: RetryRequest):
-        try: return components.orchestrator.queue_video(scene_id, request)
+        try:
+            return wake_worker(
+                components.orchestrator.queue_video(scene_id, request)
+            )
         except Exception as exc: fail(exc)
 
     @app.post("/api/scenes/{scene_id}/approval")
@@ -295,7 +318,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/projects/{project_id}/render")
     def render(project_id: str, request: RenderRequest):
-        try: return components.orchestrator.queue_render(project_id, request)
+        try:
+            return wake_worker(
+                components.orchestrator.queue_render(project_id, request)
+            )
         except Exception as exc: fail(exc)
 
     @app.post("/api/projects/{project_id}/pause")
@@ -305,7 +331,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/projects/{project_id}/resume")
     def resume(project_id: str):
-        try: return components.orchestrator.resume_project(project_id)
+        try:
+            return wake_worker(
+                components.orchestrator.resume_project(project_id)
+            )
         except Exception as exc: fail(exc)
 
     @app.post("/api/projects/{project_id}/cancel")
