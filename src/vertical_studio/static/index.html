@@ -2,7 +2,7 @@
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#10131a"><title>Vertical Video Studio</title>
-<link rel="manifest" href="/manifest.webmanifest"><link rel="stylesheet" href="/styles.css?v=reference-selection-2">
+<link rel="manifest" href="/manifest.webmanifest"><link rel="stylesheet" href="/styles.css?v=keyframe-reference-selection-1">
 </head><body>
 <header><div><span class="eyebrow">LOCAL PRODUCTION</span><h1>Vertical Video Studio</h1></div>
 <div class="header-actions"><a href="/observability.html">Observability</a><div id="runtime" class="status">Connecting...</div></div></header>
@@ -46,10 +46,20 @@
 <p class="dialog-copy">Choose zero, one, or two extracted frames. With none selected, this asset uses text-only FLUX T2I.</p>
 <div id="retry-reference-images" class="reference-selector-grid"></div>
 </fieldset>
+<fieldset id="retry-keyframe-opening-field" hidden>
+<legend>Start-keyframe references</legend>
+<p class="dialog-copy">Choose up to two inputs: canonical assets and/or extracted source scene frames. A continuation scene reuses the exact previous end frame instead.</p>
+<div id="retry-keyframe-opening-images" class="reference-selector-grid"></div>
+</fieldset>
+<fieldset id="retry-keyframe-closing-field" hidden>
+<legend>End-keyframe additional reference</legend>
+<p class="dialog-copy">The generated start frame is always Image 1 for continuity. Choose up to one canonical asset or extracted source frame as Image 2, or choose none.</p>
+<div id="retry-keyframe-closing-images" class="reference-selector-grid"></div>
+</fieldset>
 <label id="retry-negative-field">Negative prompt<textarea name="negative_prompt" class="prompt-editor compact"></textarea></label>
 <label>What was wrong?<textarea name="feedback" required minlength="2" placeholder="Describe the exact artifact, missing action, identity drift, or unwanted result."></textarea></label>
 <div id="retry-rationale" class="notice" hidden></div>
 <div class="actions"><button type="button" data-retry-close>Cancel</button><button type="button" id="revise-retry-prompts">Ask Qwen to revise</button><button type="submit" class="primary" disabled>Accept & regenerate</button></div>
 </form></dialog>
-<div id="toast"></div><script src="/app.js?v=reference-selection-2" defer></script>
+<div id="toast"></div><script src="/app.js?v=keyframe-reference-selection-1" defer></script>
 </body></html>

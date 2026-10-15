@@ -182,7 +182,7 @@ def test_keyframes_use_at_most_two_edit_references_per_endpoint(
             ],
         },
     )
-    assert calls[0] == ("leo.png", None)
+    assert calls[0] == ("leo.png", "kitchen.png")
     assert calls[1] == ("candidate-1-start.png", "dining.png")
 
 def test_reference_asset_uses_source_evidence(

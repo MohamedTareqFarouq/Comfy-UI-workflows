@@ -278,17 +278,33 @@ class Worker:
                 })
             return result
 
-        # FLUX Edit receives at most one canonical identity/environment reference.
-        # Its other slot is reserved for the exact prior/opening frame when continuity
-        # is required. The ordering above chooses a character by default and chooses
-        # the destination environment first for a location transition.
-        opening_references = references(opening_keys, 1)
-        closing_references = references(closing_keys, 1)
-        generation_payload["opening_canonical_references"] = opening_references
-        generation_payload["closing_canonical_references"] = closing_references
+        # User-selected inputs may mix canonical assets with extracted source frames.
+        # Opening anchors accept two images. Closing generation reserves Image 1 for
+        # the exact opening/continuity frame, leaving one selectable reference slot.
+        if "opening_reference_frames" in generation_payload:
+            opening_references = list(
+                generation_payload.get("opening_reference_frames", [])
+            )[:2]
+            closing_references = list(
+                generation_payload.get("closing_reference_frames", [])
+            )[:1]
+        else:
+            opening_references = references(opening_keys, 1)
+            closing_references = references(closing_keys, 1)
+        generation_payload["opening_reference_frames"] = opening_references
+        generation_payload["closing_reference_frames"] = closing_references
+        generation_payload["opening_canonical_references"] = [
+            item for item in opening_references
+            if item.get("source_type", "canonical_asset") == "canonical_asset"
+        ]
+        generation_payload["closing_canonical_references"] = [
+            item for item in closing_references
+            if item.get("source_type", "canonical_asset") == "canonical_asset"
+        ]
         generation_payload["canonical_references"] = list({
-            reference["key"]: reference
+            reference["artifact_id"]: reference
             for reference in [*opening_references, *closing_references]
+            if reference.get("artifact_id")
         }.values())
         if not scene.spec.starts_new_continuity:
             scenes = self.db.list_scenes(job.project_id)
@@ -332,21 +348,35 @@ class Worker:
             if self.db.get_job(job.id).state == JobState.CANCELLED:
                 self.db.finish_attempt(attempt, "cancelled")
                 return
+            created_starts: dict[int, Any] = {}
             for reference in generation_payload.get("source_frames", []):
-                self.db.add_artifact(
+                created = self.db.add_artifact(
                     job.project_id, ArtifactKind.IMAGE, Path(reference["path"]),
                     reference["sha256"],
                     {"candidate": reference["candidate"], "role": "start",
                      "generation_method": "reuse_previous_end",
                      "shared_from_artifact_id": reference["artifact_id"],
+                     "input_references": [{
+                         "artifact_id": reference["artifact_id"],
+                         "key": "previous_scene_end",
+                         "role": "continuity",
+                         "label": "Exact previous scene end frame",
+                         "source_type": "continuity_frame",
+                     }],
                      "continuity_group": scene.spec.continuity_group},
                     job.scene_id, attempt,
                 )
+                created_starts[reference["candidate"]] = created
             for path in result.files:
                 tokens = path.stem.split("-")
                 candidate = int(tokens[1]) if len(tokens) > 2 and tokens[1].isdigit() else 1
                 role = tokens[-1] if tokens[-1] in {"start", "end"} else "candidate"
-                if generation_payload.get("canonical_references"):
+                selected_inputs = (
+                    generation_payload.get("opening_reference_frames", [])
+                    if role == "start"
+                    else generation_payload.get("closing_reference_frames", [])
+                )
+                if selected_inputs:
                     method = (
                         "flux_klein_edit_reference_anchor"
                         if role == "start"
@@ -354,23 +384,36 @@ class Worker:
                     )
                 else:
                     method = "t2i_anchor" if role == "start" else "flux_edit"
-                self.db.add_artifact(
+                input_references = [
+                    {key: ref.get(key) for key in (
+                        "asset_id", "artifact_id", "key", "role", "label", "source_type"
+                    )}
+                    for ref in selected_inputs
+                ]
+                if role == "end" and candidate in created_starts:
+                    input_references.insert(0, {
+                        "artifact_id": created_starts[candidate].id,
+                        "key": "opening_frame",
+                        "role": "continuity",
+                        "label": "Generated opening keyframe",
+                        "source_type": "continuity_frame",
+                    })
+                created = self.db.add_artifact(
                     job.project_id, ArtifactKind.IMAGE, path, sha256_file(path),
                     {**result.metadata, "candidate": candidate, "role": role,
                      "generation_method": method,
                      "continuity_group": scene.spec.continuity_group,
+                     "input_references": input_references,
                      "canonical_references": [
-                         {key: ref.get(key) for key in ("asset_id", "artifact_id", "key", "role", "label")}
-                         for ref in (
-                             generation_payload.get("opening_canonical_references", [])
-                             if role == "start"
-                             else generation_payload.get("closing_canonical_references", [])
-                         )
+                         ref for ref in input_references
+                         if ref.get("source_type") == "canonical_asset"
                      ],
                      "opening_environment_key": opening_environment,
                      "closing_environment_key": closing_environment},
                     job.scene_id, attempt,
                 )
+                if role == "start":
+                    created_starts[candidate] = created
             self.db.finish_attempt(attempt, "succeeded")
             self.db.transition_scene(job.scene_id, SceneState.KEYFRAMES_READY)
             scenes = self.db.list_scenes(job.project_id)

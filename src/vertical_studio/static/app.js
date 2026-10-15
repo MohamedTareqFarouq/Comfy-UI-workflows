@@ -431,6 +431,9 @@ function renderDetail(){
     const latestGenerationJob=[...jobs].reverse().find(
       job=>job.scene_id===scene.id&&["keyframe","video"].includes(job.kind)
     );
+    const latestKeyframeJob=[...jobs].reverse().find(
+      job=>job.scene_id===scene.id&&job.kind==="keyframe"
+    );
     const jobLifecycle=renderJobLifecycle(latestGenerationJob);
     const selectedStart=sceneArtifacts.find(a=>a.id===scene.selected_start_artifact_id)||artifactFor(scene,"image","start",1);
     const selectedEnd=sceneArtifacts.find(a=>a.id===scene.selected_end_artifact_id)||artifactFor(scene,"image","end",1);
@@ -448,11 +451,29 @@ function renderDetail(){
       {artifact:selectedEnd,label:"Selected end"}
     ].filter(item=>item.artifact);
 
+    const keyframeReferenceHtml=(item)=>{
+      let inputs=item.artifact.metadata?.input_references||[];
+      if(!inputs.length&&latestKeyframeJob){
+        const key=item.artifact.metadata?.role==="start"
+          ?"opening_reference_frames":"closing_reference_frames";
+        inputs=latestKeyframeJob.payload?.[key]||[];
+      }
+      return `<div class="keyframe-inputs"><b>Inputs used</b>${
+        inputs.length?`<div>${inputs.map((reference,index)=>`
+          <a href="/api/artifacts/${encodeURIComponent(reference.artifact_id)}/content"
+            target="_blank" rel="noopener noreferrer"
+            title="${esc(reference.label||reference.key||"Reference "+(index+1))}">
+            <img src="/api/artifacts/${encodeURIComponent(reference.artifact_id)}/content"
+              alt="${esc(reference.label||reference.key||"Reference "+(index+1))}">
+            <small>${esc(reference.source_type==="source_frame"?"source":reference.role||index+1)}</small>
+          </a>`).join("")}</div>`:`<small>None — text-only start or continuity-only end</small>`
+      }</div>`;
+    };
     let media=shown.length?`<div class="media-grid">${shown.map(item=>`
-      <div class="media">
+      <div class="keyframe-tile"><div class="media">
         <img src="/api/artifacts/${item.artifact.id}/content">
         <small>${item.label}</small>
-      </div>
+      </div>${keyframeReferenceHtml(item)}</div>
     `).join("")}</div>`:"";
     if(video){
       media+=`<div class="media"><video controls preload="metadata" src="/api/artifacts/${video.id}/content"></video></div>`;
@@ -483,7 +504,7 @@ function renderDetail(){
           <button data-kf="${scene.id}" data-start="${pair.start.id}" data-end="${pair.end.id}">
             Approve candidate ${pair.candidate}
           </button>
-        `).join("")}<button data-retry-kf="${scene.id}">Regenerate</button>`;
+        `).join("")}<button data-retry-kf="${scene.id}">References & regenerate</button>`;
     }
     if(scene.state==="planned"&&scene.continuity_stale){
       controls='<small>Waiting for the regenerated previous scene to be approved.</small>';
@@ -732,11 +753,15 @@ async function openGuidedRetry(sceneId,stage,trigger=null){
   q("#retry-reference-field").hidden=true;
   q("#retry-reference-images-field").hidden=true;
   q("#retry-reference-images").innerHTML="";
+  q("#retry-keyframe-opening-field").hidden=true;
+  q("#retry-keyframe-closing-field").hidden=true;
+  q("#retry-keyframe-opening-images").innerHTML="";
+  q("#retry-keyframe-closing-images").innerHTML="";
   q("#retry-negative-field").hidden=false;
-  form.elements.feedback.required=true;
+  form.elements.feedback.required=stage==="video";
   q("#retry-title").textContent=stage==="keyframe"?"Revise Flux keyframe prompts":"Revise Wan video prompt";
   q("#retry-description").textContent=stage==="keyframe"
-    ?"Describe what is wrong with this scene's keyframes. Qwen will revise only the Flux prompts."
+    ?"Review the exact FLUX inputs, change canonical/source-frame references, or describe a correction for Qwen."
     :"Describe what is wrong with this clip. Qwen will revise only the Wan prompt.";
   q("#retry-rationale").hidden=true;
   setRetryStatus("Loading the current prompts...");
@@ -748,7 +773,51 @@ async function openGuidedRetry(sceneId,stage,trigger=null){
     form.elements.video_prompt.value=bundle.video_prompt||"";
     form.elements.negative_prompt.value=bundle.negative_prompt||"";
     q("#retry-start-field").hidden=stage!=="keyframe"||!bundle.start_prompt;
-    setRetryStatus("Prompts loaded. Add feedback, then ask Qwen to revise.","ready");
+    if(stage==="keyframe"){
+      const options=bundle.reference_options||[];
+      const renderOptions=(targetId,selectedIds,limit)=>{
+        const selected=new Set(selectedIds||[]);
+        const target=q(targetId);
+        target.innerHTML=options.map(reference=>`<label class="reference-selector ${selected.has(reference.artifact_id)?"selected":""}">
+          <input type="checkbox" value="${esc(reference.artifact_id)}"
+            ${selected.has(reference.artifact_id)?"checked":""}>
+          <img src="/api/artifacts/${encodeURIComponent(reference.artifact_id)}/content"
+            alt="${esc(reference.label)}">
+          <span>${esc(reference.source_type==="source_frame"?"Source frame · "+reference.label:"Canonical · "+reference.label)}</span>
+        </label>`).join("");
+        target.onchange=event=>{
+          const checked=[...target.querySelectorAll("input:checked")];
+          if(checked.length>limit){
+            event.target.checked=false;
+            toast(`Choose no more than ${limit} reference${limit===1?"":"s"}`);
+          }
+          event.target.closest(".reference-selector")?.classList.toggle("selected",event.target.checked);
+        };
+      };
+      renderOptions(
+        "#retry-keyframe-opening-images",
+        bundle.opening_reference_artifact_ids,
+        2
+      );
+      renderOptions(
+        "#retry-keyframe-closing-images",
+        bundle.closing_reference_artifact_ids,
+        1
+      );
+      q("#retry-keyframe-opening-field").hidden=
+        bundle.opening_uses_continuity_frame||!options.length;
+      q("#retry-keyframe-closing-field").hidden=!options.length;
+      form.dataset.revised="true";
+      submitButton.disabled=false;
+      setRetryStatus(
+        options.length
+          ?"References loaded. You can regenerate with reference changes only, or add feedback for Qwen."
+          :"No selectable references are available; prompt-only regeneration remains available.",
+        "ready"
+      );
+    }else{
+      setRetryStatus("Prompts loaded. Add feedback, then ask Qwen to revise.","ready");
+    }
     reviseButton.disabled=false;
   }catch(error){
     setRetryStatus(error.message,"error");
@@ -781,6 +850,10 @@ async function openCanonicalRetry(assetId,trigger=null){
   q("#retry-reference-field").hidden=false;
   q("#retry-reference-images-field").hidden=true;
   q("#retry-reference-images").innerHTML="";
+  q("#retry-keyframe-opening-field").hidden=true;
+  q("#retry-keyframe-closing-field").hidden=true;
+  q("#retry-keyframe-opening-images").innerHTML="";
+  q("#retry-keyframe-closing-images").innerHTML="";
   q("#retry-negative-field").hidden=true;
   form.elements.feedback.required=false;
   q("#retry-title").textContent="Choose source frames and regenerate";
@@ -832,7 +905,7 @@ async function reviseGuidedRetry(){
   const form=q("#retry-form");
   if(form.dataset.busy==="true"||!form.reportValidity())return;
   const stage=form.elements.stage.value;
-  if(stage==="reference"&&form.elements.feedback.value.trim().length<2){
+  if(form.elements.feedback.value.trim().length<2){
     setRetryStatus("Add a short correction before asking Qwen to revise the prompt.","error");
     return;
   }
@@ -978,7 +1051,7 @@ q("#retry-form").onsubmit=async event=>{
   event.preventDefault();
   const form=event.currentTarget;
   if(form.dataset.busy==="true")return;
-  if(form.elements.stage.value!=="reference"&&form.dataset.revised!=="true")return;
+  if(form.elements.stage.value==="video"&&form.dataset.revised!=="true")return;
   const sceneId=form.elements.scene_id.value;
   const assetId=form.elements.asset_id.value;
   const stage=form.elements.stage.value;
@@ -1002,6 +1075,10 @@ q("#retry-form").onsubmit=async event=>{
   if(stage==="keyframe"){
     body.changed_start_prompt=form.elements.start_prompt.value||null;
     body.changed_end_prompt=form.elements.end_prompt.value;
+    body.opening_reference_artifact_ids=q("#retry-keyframe-opening-field").hidden
+      ?[]:[...q("#retry-keyframe-opening-images").querySelectorAll("input:checked")].map(input=>input.value);
+    body.closing_reference_artifact_ids=q("#retry-keyframe-closing-field").hidden
+      ?[]:[...q("#retry-keyframe-closing-images").querySelectorAll("input:checked")].map(input=>input.value);
   }else if(stage==="video"){
     body.changed_prompt=form.elements.video_prompt.value;
   }

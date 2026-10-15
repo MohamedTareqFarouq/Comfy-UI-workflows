@@ -475,11 +475,17 @@ class ComfyClient:
             resolved_negative = ", ".join(filter(None, negative_parts))
         common = {**payload, "negative_prompt": resolved_negative}
         canonical = list(payload.get("canonical_references", []))[:2]
-        opening_canonical = list(
-            payload.get("opening_canonical_references", canonical)
-        )[:1]
-        closing_canonical = list(
-            payload.get("closing_canonical_references", canonical)
+        opening_references = list(
+            payload.get(
+                "opening_reference_frames",
+                payload.get("opening_canonical_references", canonical),
+            )
+        )[:2]
+        closing_references = list(
+            payload.get(
+                "closing_reference_frames",
+                payload.get("closing_canonical_references", canonical),
+            )
         )[:1]
         legacy_sheet = (
             Path(payload["character_sheet_path"])
@@ -505,8 +511,8 @@ class ComfyClient:
         for candidate in range(1, candidates + 1):
             if mode == "anchor":
                 reference_rule = (
-                    self._reference_directive(opening_canonical)
-                    if opening_canonical else ""
+                    self._reference_directive(opening_references)
+                    if opening_references else ""
                 )
                 start_prompt = payload.get("start_prompt_override") or (
                     f"{style_directive}{count_rule}{reference_rule}"
@@ -519,12 +525,15 @@ class ComfyClient:
                     f"Opening environment lock: {spec.get('opening_environment_key') or spec.get('environment_key') or 'unspecified'}. "
                     f"{spec.get('safe_area', '')}"
                 )
-                if opening_canonical:
+                if opening_references:
                     start_result = self._generate_edit_image(
                         output_dir / f"candidate-{candidate}-start-run", common,
                         prompt=start_prompt, seed=base_seed + candidate * 10,
-                        source_path=Path(opening_canonical[0]["path"]),
-                        reference_path=None,
+                        source_path=Path(opening_references[0]["path"]),
+                        reference_path=(
+                            Path(opening_references[1]["path"])
+                            if len(opening_references) > 1 else None
+                        ),
                         output_prefix=f"{payload['scene_id']}-c{candidate}-start",
                     )
                 else:
@@ -553,7 +562,7 @@ class ComfyClient:
                 "key": "opening_frame", "role": "continuity",
                 "label": "the exact opening frame", "path": str(start_path),
             }
-            end_references = [continuity_reference, *closing_canonical]
+            end_references = [continuity_reference, *closing_references]
             closing_state = spec.get("closing_state") or spec["end_composition"]
             end_prompt = payload.get("end_prompt_override") or (
                 f"{style_directive}{count_rule}{self._reference_directive(end_references)}"
@@ -567,8 +576,8 @@ class ComfyClient:
                 "No duplicate or hybrid characters, no collage, and no additional people."
             )
             selected_reference = (
-                Path(closing_canonical[0]["path"])
-                if closing_canonical else legacy_sheet
+                Path(closing_references[0]["path"])
+                if closing_references else legacy_sheet
             )
             end_result = self._generate_edit_image(
                 output_dir / f"candidate-{candidate}-end-run", common,
@@ -590,8 +599,9 @@ class ComfyClient:
             metadata={
                 "runs": runs, "generation_mode": mode,
                 "canonical_reference_count": len(canonical),
-                "opening_reference_count": len(opening_canonical),
-                "closing_reference_count": len(closing_canonical),
+                "opening_reference_count": len(opening_references),
+                "closing_reference_count": len(closing_references),
+                "reference_selection": "user_selectable",
                 "opening_environment_key": spec.get("opening_environment_key") or spec.get("environment_key"),
                 "closing_environment_key": spec.get("closing_environment_key") or spec.get("opening_environment_key") or spec.get("environment_key"),
             },

@@ -727,6 +727,91 @@ class Orchestrator:
             stable_key("character_sheet", project_id, payload), payload,
         )
 
+    def _keyframe_reference_catalog(self, scene: Scene) -> list[dict[str, Any]]:
+        catalog: list[dict[str, Any]] = []
+        project = self.db.get_project(scene.project_id)
+        if project.source_mode == SourceMode.REFERENCE:
+            analysis = self.db.get_reference_analysis(project.id)
+            if analysis and analysis["approved"]:
+                for order, artifact_id in enumerate(
+                    analysis["trace"].get("evidence_artifact_ids", []), 1
+                ):
+                    artifact = self.db.get_artifact(artifact_id)
+                    catalog.append({
+                        "artifact_id": artifact.id,
+                        "key": f"source_frame_{order}",
+                        "role": "source_scene",
+                        "label": f"Extracted source frame {order}",
+                        "source_type": "source_frame",
+                        "order": order,
+                        "path": artifact.path,
+                    })
+        for asset in self.db.list_canonical_assets(scene.project_id):
+            if not asset.approved or not asset.artifact_id:
+                continue
+            artifact = self.db.get_artifact(asset.artifact_id)
+            catalog.append({
+                "artifact_id": artifact.id,
+                "asset_id": asset.id,
+                "key": asset.key,
+                "role": asset.role,
+                "label": asset.label,
+                "source_type": "canonical_asset",
+                "path": artifact.path,
+            })
+        return catalog
+
+    def _default_keyframe_reference_ids(
+        self, scene: Scene, catalog: list[dict[str, Any]]
+    ) -> tuple[list[str], list[str]]:
+        canonical = {
+            item["key"]: item for item in catalog
+            if item["source_type"] == "canonical_asset"
+        }
+        opening_environment = (
+            scene.spec.opening_environment_key or scene.spec.environment_key
+        )
+        closing_environment = (
+            scene.spec.closing_environment_key or opening_environment
+        )
+        character_keys = list(scene.spec.characters_present)
+        prop_keys = list(scene.spec.important_props)
+        explicit = [
+            *character_keys, *prop_keys,
+            *[key for key in (opening_environment, closing_environment) if key],
+        ]
+        other = [key for key in scene.spec.reference_keys if key not in explicit]
+        opening_keys = list(dict.fromkeys(
+            [*character_keys, opening_environment, *prop_keys, *other]
+        ))
+        closing_keys = list(dict.fromkeys(
+            (
+                [closing_environment, *character_keys]
+                if closing_environment != opening_environment
+                else [*character_keys, closing_environment]
+            ) + [*prop_keys, *other]
+        ))
+        if not explicit:
+            opening_keys = closing_keys = list(scene.spec.reference_keys) or list(canonical)
+        opening = next(
+            (canonical[key]["artifact_id"] for key in opening_keys if key in canonical),
+            None,
+        )
+        closing = next(
+            (canonical[key]["artifact_id"] for key in closing_keys if key in canonical),
+            None,
+        )
+        return (
+            [opening] if opening and scene.spec.starts_new_continuity else [],
+            [closing] if closing else [],
+        )
+
+    @staticmethod
+    def _selected_keyframe_references(
+        ids: list[str], allowed: dict[str, dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        return [allowed[artifact_id] for artifact_id in ids]
+
     def queue_keyframes(self, scene_id: str, retry: RetryRequest | None = None) -> Job:
         scene = self.db.get_scene(scene_id)
         project = self.db.get_project(scene.project_id)
@@ -738,6 +823,28 @@ class Orchestrator:
         if scene.state != SceneState.KEYFRAMES_QUEUED:
             scene = self.db.transition_scene(scene_id, SceneState.KEYFRAMES_QUEUED)
         prior = [j for j in self.db.list_jobs(scene.project_id) if j.scene_id == scene.id and j.kind == JobKind.KEYFRAME]
+        catalog = self._keyframe_reference_catalog(scene)
+        allowed = {item["artifact_id"]: item for item in catalog}
+        default_opening, default_closing = self._default_keyframe_reference_ids(
+            scene, catalog
+        )
+        opening_ids = list(dict.fromkeys(
+            retry.opening_reference_artifact_ids
+            if retry and retry.opening_reference_artifact_ids is not None
+            else default_opening
+        ))
+        closing_ids = list(dict.fromkeys(
+            retry.closing_reference_artifact_ids
+            if retry and retry.closing_reference_artifact_ids is not None
+            else default_closing
+        ))
+        if len(opening_ids) > 2 or len(closing_ids) > 1:
+            raise ValueError("keyframes accept two opening references and one closing reference")
+        invalid = [item for item in [*opening_ids, *closing_ids] if item not in allowed]
+        if invalid:
+            raise ValueError(
+                "selected keyframe references must be approved canonical assets or extracted source frames"
+            )
         payload = {"scene_id": scene.id, "scene_revision": scene.revision, "spec": scene.spec.model_dump(),
                    "visual_style": project.visual_style,
                    "candidates": 1, "width": 384, "height": 672,
@@ -750,8 +857,43 @@ class Orchestrator:
                    "end_prompt_override": retry.changed_end_prompt if retry else None,
                    "negative_prompt_override": retry.changed_negative_prompt if retry else None,
                    "retry_feedback": retry.feedback if retry else "",
-                   "revision_rationale": retry.revision_rationale if retry else ""}
+                   "revision_rationale": retry.revision_rationale if retry else "",
+                   "opening_reference_frames": self._selected_keyframe_references(
+                       opening_ids, allowed),
+                   "closing_reference_frames": self._selected_keyframe_references(
+                       closing_ids, allowed)}
         return self.db.create_job(scene.project_id, JobKind.KEYFRAME, stable_key("keyframe", payload), payload, scene.id)
+
+    def _with_keyframe_reference_controls(
+        self, scene: Scene, bundle: RetryPromptBundle
+    ) -> RetryPromptBundle:
+        catalog = self._keyframe_reference_catalog(scene)
+        default_opening, default_closing = self._default_keyframe_reference_ids(
+            scene, catalog
+        )
+        latest = next((
+            job for job in reversed(self.db.list_jobs(scene.project_id))
+            if job.kind == JobKind.KEYFRAME and job.scene_id == scene.id
+        ), None)
+        opening = (
+            [item["artifact_id"] for item in latest.payload.get("opening_reference_frames", [])]
+            if latest and "opening_reference_frames" in latest.payload else default_opening
+        )
+        closing = (
+            [item["artifact_id"] for item in latest.payload.get("closing_reference_frames", [])]
+            if latest and "closing_reference_frames" in latest.payload else default_closing
+        )
+        return bundle.model_copy(update={
+            "reference_options": [
+                {key: item.get(key) for key in (
+                    "artifact_id", "key", "role", "label", "source_type", "order"
+                )}
+                for item in catalog
+            ],
+            "opening_reference_artifact_ids": opening,
+            "closing_reference_artifact_ids": closing,
+            "opening_uses_continuity_frame": not scene.spec.starts_new_continuity,
+        })
 
     def get_retry_prompts(self, scene_id: str, stage: str) -> RetryPromptBundle:
         if stage not in {"keyframe", "video"}:
@@ -770,19 +912,24 @@ class Orchestrator:
                 start = next((run for run in matching if run.get("role") == "start"), None)
                 end = next((run for run in matching if run.get("role") == "end"), None)
                 if end:
-                    return RetryPromptBundle(
-                        stage="keyframe",
-                        start_prompt=start.get("prompt") if start else None,
-                        end_prompt=end.get("prompt"),
-                        negative_prompt=end.get("negative_prompt", ""),
+                    return self._with_keyframe_reference_controls(
+                        scene,
+                        RetryPromptBundle(
+                            stage="keyframe",
+                            start_prompt=start.get("prompt") if start else None,
+                            end_prompt=end.get("prompt"),
+                            negative_prompt=end.get("negative_prompt", ""),
+                        ),
                     )
-            return RetryPromptBundle(
-                stage="keyframe",
-                start_prompt=(
-                    scene.spec.start_composition if scene.spec.starts_new_continuity else None
+            return self._with_keyframe_reference_controls(
+                scene, RetryPromptBundle(
+                    stage="keyframe",
+                    start_prompt=(
+                        scene.spec.start_composition if scene.spec.starts_new_continuity else None
+                    ),
+                    end_prompt=scene.spec.end_composition,
+                    negative_prompt=", ".join(scene.spec.negative_constraints),
                 ),
-                end_prompt=scene.spec.end_composition,
-                negative_prompt=", ".join(scene.spec.negative_constraints),
             )
         for artifact in reversed(artifacts):
             if artifact.kind != ArtifactKind.VIDEO:

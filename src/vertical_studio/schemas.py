@@ -596,6 +596,10 @@ class RetryPromptBundle(BaseModel):
     video_prompt: str | None = Field(default=None, max_length=8000)
     negative_prompt: str = Field(default="", max_length=4000)
     rationale: str = Field(default="", max_length=2000)
+    reference_options: list[dict[str, Any]] = Field(default_factory=list)
+    opening_reference_artifact_ids: list[str] = Field(default_factory=list, max_length=2)
+    closing_reference_artifact_ids: list[str] = Field(default_factory=list, max_length=1)
+    opening_uses_continuity_frame: bool = False
 
     @model_validator(mode="after")
     def validate_stage_prompts(self) -> "RetryPromptBundle":
@@ -642,6 +646,12 @@ class RetryRequest(BaseModel):
     feedback: str = Field(default="", max_length=4000)
     revision_rationale: str = Field(default="", max_length=2000)
     new_seed: bool = True
+    opening_reference_artifact_ids: list[str] | None = Field(
+        default=None, max_length=2
+    )
+    closing_reference_artifact_ids: list[str] | None = Field(
+        default=None, max_length=1
+    )
 
 
 class RenderRequest(BaseModel):
