@@ -33,6 +33,11 @@ cd vertical-video-studio
 
 Open <http://127.0.0.1:8765>.
 
+For the capability-routed backend without the PWA, see
+[`docs/HEADLESS_WINDOWS.md`](docs/HEADLESS_WINDOWS.md). It documents native
+Windows and WSL2 installation, persistent Streamable HTTP MCP for OpenCode, the
+stdio adapter, simulation-first operation, and guarded real-workflow setup.
+
 The first three commands normally used after cloning are therefore:
 
 | Command | Purpose |

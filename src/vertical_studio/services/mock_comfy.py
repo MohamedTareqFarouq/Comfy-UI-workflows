@@ -99,6 +99,16 @@ class MockComfyClient:
         )
         return GenerationResult(files=[target], metadata={"simulated": True, "probe": probe_media(target)})
 
+    def generate_capability_image(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult:
+        """Execute a validated headless image request using the mock contract."""
+        return self.generate_reference_asset(output_dir, {
+            **payload, "asset_key": payload.get("asset_key", "headless-image")
+        })
+
+    def generate_capability_video(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult:
+        """Execute a validated headless video request using the mock contract."""
+        return self.generate_video(output_dir, payload)
+
     def interrupt(self) -> None:
         return None
 

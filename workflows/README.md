@@ -21,6 +21,11 @@ The Wan 14B export must retain:
 
 Copy `workflow_maps.example.json` to `workflow_maps.json` and replace every placeholder with node IDs from the exact API export. Runtime values are deterministic patches, never language-model graph edits:
 
+`wan22_i2v_api.json` is the registered start-frame-only Wan 2.2 workflow. It
+uses the same high-noise model, low-noise model, VAE, text encoder, and four-step
+LoRAs as the existing Wan 2.2 FLF2V profile. Treat it as unqualified until its
+node classes and outputs have been smoke-tested on the target ComfyUI revision.
+
 ```json
 {
   "patches": [

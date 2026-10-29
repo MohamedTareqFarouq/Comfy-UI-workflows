@@ -63,6 +63,16 @@
       "input": "filename_prefix"
     }
   },
+  "wan22_i2v_api": {
+    "prompt": {"node_id": "8", "input": "text"},
+    "negative_prompt": {"node_id": "9", "input": "text"},
+    "seed": {"node_id": "13", "input": "noise_seed"},
+    "width": {"node_id": "12", "input": "width"},
+    "height": {"node_id": "12", "input": "height"},
+    "frames": {"node_id": "12", "input": "length"},
+    "start_image": {"node_id": "11", "input": "image"},
+    "output_prefix": {"node_id": "17", "input": "filename_prefix"}
+  },
   "image_flux2_klein_image_edit_4b_distilled_api": {
     "prompt": {
       "node_id": "REPLACE",

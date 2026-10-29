@@ -31,6 +31,8 @@ class Generator(Protocol):
     def generate_character_sheet(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult: ...
     def generate_keyframes(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult: ...
     def generate_video(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult: ...
+    def generate_capability_image(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult: ...
+    def generate_capability_video(self, output_dir: Path, payload: dict[str, Any]) -> GenerationResult: ...
     def health(self) -> dict[str, Any]: ...
     def interrupt(self) -> None: ...
     def free_memory(self) -> None: ...
@@ -718,6 +720,62 @@ class ComfyClient:
                     "frames": values["frames"],
                 },
             },
+        )
+
+    def generate_capability_image(
+        self, output_dir: Path, payload: dict[str, Any]
+    ) -> GenerationResult:
+        """Run only a registered image mode with validated artifact paths."""
+        references = list(payload.get("resolved_references", []))
+        capability_id = payload["capability_id"]
+        common = dict(
+            prompt=payload["prompt"], seed=int(payload["seed"]),
+            output_prefix=f"headless-{payload['operation_id']}",
+        )
+        if capability_id == "flux_klein.t2i.v1":
+            return self._generate_t2i_image(output_dir, payload, **common)
+        if capability_id not in {
+            "flux_klein.single_reference.v1", "flux_klein.multi_reference.v1"
+        }:
+            raise GenerationError("unsupported_capability", capability_id)
+        return self._generate_multiref_image(
+            output_dir, payload, references=references, **common
+        )
+
+    def generate_capability_video(
+        self, output_dir: Path, payload: dict[str, Any]
+    ) -> GenerationResult:
+        """Run registered Wan I2V/FLF2V without accepting caller-provided patches."""
+        capability_id = payload["capability_id"]
+        is_flf = capability_id == "wan22.flf2v.v1"
+        if capability_id not in {"wan22.i2v.v1", "wan22.flf2v.v1"}:
+            raise GenerationError("unsupported_capability", capability_id)
+        template = "wan14b_lightx2v_flf2v_api" if is_flf else "wan22_i2v_api"
+        required = {
+            "prompt", "negative_prompt", "seed", "width", "height", "frames",
+            "start_image", "output_prefix",
+        }
+        if is_flf: required.add("end_image")
+        mapping = self._load_mapping(template, required)
+        references = {item["role"]: item for item in payload["resolved_references"]}
+        values = {
+            "prompt": " ".join(filter(None, [payload["prompt"], payload.get("motion_description"), payload.get("camera_description")])),
+            "negative_prompt": payload.get("negative_prompt", ""),
+            "seed": int(payload["seed"]), "width": int(payload["width"]),
+            "height": int(payload["height"]), "frames": int(payload["frames"]),
+            "start_image": self._upload_image(Path(references["start_frame"]["path"])),
+            "output_prefix": f"headless-{payload['operation_id']}",
+        }
+        if is_flf:
+            values["end_image"] = self._upload_image(Path(references["end_frame"]["path"]))
+        result = self._run(
+            template, {"patches": self._mapped_patches(mapping, values)}, output_dir
+        )
+        return GenerationResult(
+            files=result.files,
+            metadata={**result.metadata, "capability_id": capability_id,
+                      "prompt_audit": {**values, "start_image": references["start_frame"]["path"],
+                                       "end_image": references.get("end_frame", {}).get("path")}},
         )
 
     def interrupt(self) -> None:
