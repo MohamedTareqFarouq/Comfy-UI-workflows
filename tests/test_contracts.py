@@ -813,3 +813,28 @@ def test_wan_prompt_enforces_project_style(monkeypatch, tmp_path: Path) -> None:
     assert "MANDATORY VISUAL STYLE: cinematic 3D cartoon" in values["prompt"]
     assert "Do not convert it to photorealistic" in values["prompt"]
     assert "photorealistic" in values["negative_prompt"]
+
+
+def test_model_manifest_covers_every_workflow_model() -> None:
+    root = Path(__file__).parents[1]
+    manifest = json.loads((root / "config" / "models.json").read_text())
+    declared = {(item["directory"], item["file"]) for item in manifest["comfy_models"]}
+    referenced: set[tuple[str, str]] = set()
+    fields = {
+        "unet_name": "diffusion_models", "clip_name": "text_encoders",
+        "vae_name": "vae", "lora_name": "loras",
+    }
+    for path in (root / "workflows").glob("*.json"):
+        graph = json.loads(path.read_text())
+        if not isinstance(graph, dict):
+            continue
+        for node in graph.values():
+            if not isinstance(node, dict):
+                continue
+            for field, directory in fields.items():
+                value = node.get("inputs", {}).get(field)
+                if isinstance(value, str):
+                    referenced.add((directory, value))
+    assert referenced <= declared
+    assert len(manifest["comfy_models"]) == 9
+    assert all(item["url"].startswith("https://huggingface.co/") for item in manifest["comfy_models"])

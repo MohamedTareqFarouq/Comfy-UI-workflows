@@ -12,6 +12,7 @@ from vertical_studio.capabilities import RoutingError
 from vertical_studio.config import Settings
 from vertical_studio.headless import HeadlessMediaService, ProductionService
 from vertical_studio.headless_schemas import (
+    ProductionTaskRequest,
     ArtifactRef,
     ImageGenerationRequest,
     ProductionStartRequest,
@@ -95,12 +96,11 @@ def test_production_graph_is_model_neutral_and_dependency_driven(headless) -> No
         idempotency_key="production-test-0001",
     ))
     assert session["approval_policy"]["preset"] == "approve_first_heavy"
-    assert [task["role"] for task in session["tasks"]] == list(ProductionService.ROLES)
+    assert [task["role"] for task in session["tasks"]] == ["controller"]
     assert session["tasks"][0]["status"] == "ready"
-    assert session["tasks"][1]["status"] == "pending"
     updated = production.update_task(session["id"], session["tasks"][0]["id"], "completed",
-                                     {"entities": [], "canonical_asset_suggestions": []}, [])
-    assert updated["tasks"][1]["status"] == "ready"
+                                     {"decision": "plan"}, [])
+    assert updated["tasks"][0]["status"] == "completed"
     assert "OpenCode" not in updated["tasks"][0]["handoff"]
 
 
@@ -150,6 +150,36 @@ def test_mcp_exposes_atomic_and_production_control_contract(headless) -> None:
             "media_evaluate", "media_render_sequence", "media_cancel_operation",
             "production_start", "production_update_task", "production_request_approval",
             "production_cancel", "production_emergency_stop", "production_steer",
+            "production_get_situation", "production_create_task", "production_invalidate_task",
         } <= names
     finally:
         service.stop()
+
+
+def test_agent_selects_stages_and_invalidation_is_transitive(headless) -> None:
+    production = ProductionService(headless)
+    session = production.start(ProductionStartRequest(
+        goal="Make one image", user_prompt="A calm portrait",
+        idempotency_key="dynamic-session-0001",
+    ))
+    assert [task["role"] for task in session["tasks"]] == ["controller"]
+    controller_id = session["tasks"][0]["id"]
+    production.update_task(session["id"], controller_id, "completed", {"decision": "skip planning"}, [])
+    image = production.create_task(session["id"], ProductionTaskRequest(
+        stage="image", objective="Generate the requested portrait",
+        dependency_task_ids=[controller_id], acceptance_criteria=["portrait exists"],
+        idempotency_key="dynamic-image-0001",
+    ))
+    image_task = next(task for task in image["active_tasks"] if task["role"] == "image")
+    assert image_task["status"] == "ready"
+    qa = production.create_task(session["id"], ProductionTaskRequest(
+        stage="qa", objective="Review the portrait", dependency_task_ids=[image_task["id"]],
+        idempotency_key="dynamic-qa-0001",
+    ))
+    qa_task = next(task for task in qa["active_tasks"] if task["role"] == "qa")
+    assert qa_task["status"] == "pending"
+    invalidated = production.invalidate_task(session["id"], image_task["id"], "change requested")
+    statuses = {task["role"]: task["status"] for task in production.inspect(session["id"])["tasks"]}
+    assert statuses["image"] == "invalidated"
+    assert statuses["qa"] == "invalidated"
+    assert "create_task" in invalidated["allowed_actions"]

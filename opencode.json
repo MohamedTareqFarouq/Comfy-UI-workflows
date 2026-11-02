@@ -1,0 +1,18 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "vertical-producer",
+  "mcp": {
+    "servers": {
+      "vertical-media-production": {
+        "type": "local",
+        "command": [".venv/bin/python", "-m", "vertical_studio.mcp_server", "--transport", "stdio"],
+        "cwd": ".",
+        "environment": {
+          "VVS_DATA_DIR": "{env:VVS_DATA_DIR}",
+          "VVS_EXECUTION_MODE": "{env:VVS_EXECUTION_MODE}",
+          "VVS_COMFY_URL": "{env:VVS_COMFY_URL}"
+        }
+      }
+    }
+  }
+}

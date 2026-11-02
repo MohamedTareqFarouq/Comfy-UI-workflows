@@ -16,6 +16,7 @@ from .headless_schemas import (
     EvaluationRequest,
     ImageGenerationRequest,
     ProductionStartRequest,
+    ProductionTaskRequest,
     RenderRequest,
     VideoGenerationRequest,
 )
@@ -127,6 +128,21 @@ def build_mcp(settings: Settings | None = None) -> tuple[MCPServer, HeadlessMedi
     def production_inspect(production_session_id: str) -> dict[str, Any]:
         """Inspect session interpretation, tasks, handoffs, operations, approvals, budgets, and events."""
         return production.inspect(production_session_id)
+
+    @server.tool()
+    def production_get_situation(production_session_id: str) -> dict[str, Any]:
+        """Return compact state, budgets, current work, steering, and allowed next actions."""
+        return production.situation(production_session_id)
+
+    @server.tool()
+    def production_create_task(production_session_id: str, request: ProductionTaskRequest) -> dict[str, Any]:
+        """Create an agent-selected stage with explicit dependencies; stages may be skipped or revisited."""
+        return production.create_task(production_session_id, request)
+
+    @server.tool()
+    def production_invalidate_task(production_session_id: str, task_id: str, reason: str) -> dict[str, Any]:
+        """Invalidate one task and its transitive dependents while preserving unrelated artifacts."""
+        return production.invalidate_task(production_session_id, task_id, reason)
 
     @server.tool()
     def production_update_task(production_session_id: str, task_id: str, status: str,

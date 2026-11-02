@@ -152,6 +152,17 @@ class ProductionStartRequest(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=200)
 
 
+class ProductionTaskRequest(BaseModel):
+    stage: Literal[
+        "analyze", "plan", "asset", "image", "video", "qa", "repair", "render", "finish"
+    ]
+    objective: str = Field(min_length=1)
+    dependency_task_ids: list[str] = Field(default_factory=list)
+    input_artifact_ids: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    idempotency_key: str = Field(min_length=8, max_length=200)
+
+
 class CancelRequest(BaseModel):
     operation_id: str | None = None
     active_scope: Literal["none", "current", "image", "video", "all"] = "all"

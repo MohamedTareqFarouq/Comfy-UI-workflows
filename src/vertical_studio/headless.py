@@ -19,6 +19,7 @@ from .headless_schemas import (
     MediaType,
     OperationState,
     ProductionStartRequest,
+    ProductionTaskRequest,
     ReferenceRole,
     RenderRequest,
     VideoGenerationRequest,
@@ -541,7 +542,7 @@ class HeadlessMediaService:
 
 
 class ProductionService:
-    ROLES = ("reference_analysis", "director", "asset", "image", "video", "qa", "editor")
+    STAGES = ("analyze", "plan", "asset", "image", "video", "qa", "repair", "render", "finish")
 
     def __init__(self, media: HeadlessMediaService):
         self.media = media
@@ -559,19 +560,19 @@ class ProductionService:
                  request.budgets.model_dump_json(), json.dumps({"image_operations": 0, "video_operations": 0, "generated_video_seconds": 0}),
                  request.approval_policy.model_dump_json(), "[]", 0, now, now),
             )
-            previous = None
-            for role in self.ROLES:
-                task_id = uuid.uuid4().hex
-                requirements = {
-                    "goal": request.goal, "user_prompt": request.user_prompt,
-                    "instructions": self._instructions(role),
-                }
-                connection.execute(
-                    "INSERT INTO production_tasks VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                    (task_id, session_id, role, "ready" if previous is None else "pending", json.dumps(requirements),
-                     json.dumps([] if previous is None else [previous]), "[]", "{}", None, now, now),
-                )
-                previous = task_id
+            task_id = uuid.uuid4().hex
+            requirements = {
+                "goal": request.goal, "user_prompt": request.user_prompt,
+                "objective": "Inspect the request and choose the smallest sufficient next stage.",
+                "acceptance_criteria": ["A concrete next stage is selected or the request is complete."],
+                "instructions": self._instructions("controller"),
+                "idempotency_key": f"controller-{request.idempotency_key}",
+            }
+            connection.execute(
+                "INSERT INTO production_tasks VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (task_id, session_id, "controller", "ready", json.dumps(requirements),
+                 "[]", "[]", "{}", None, now, now),
+            )
             self._event(connection, session_id, "session_started", {"request": request.model_dump(mode="json")})
         return self.inspect(session_id)
 
@@ -583,13 +584,16 @@ class ProductionService:
             "Do not repeat an unchanged request after the same failure.",
         ]
         specific = {
-            "reference_analysis": ["Extract typed evidence and recommend, but do not promote, canonical assets."],
-            "director": ["Define beats, shots, continuity facts, requirements, and acceptance criteria."],
+            "controller": ["Inspect the situation, skip unnecessary stages, and create only the smallest sufficient next task."],
+            "analyze": ["Extract typed evidence and recommend, but do not promote, canonical assets."],
+            "plan": ["Define beats, shots, continuity facts, requirements, and acceptance criteria."],
             "asset": ["Propose canonical identity, environment, and prop assets and stop dependents if rejected."],
             "image": ["Use T2I for no reference, single-reference for one dominant input, and multi-reference to combine inputs."],
             "video": ["Prefer I2V from an approved start; use FLF2V only when the destination state matters."],
             "qa": ["Evaluate declared requirements and recommend a materially changed retry or stop."],
-            "editor": ["Select approved clips explicitly and render in the declared order."],
+            "repair": ["Diagnose the failed requirement, preserve unaffected artifacts, and repair the smallest dependency."],
+            "render": ["Select approved clips explicitly and render in the declared order."],
+            "finish": ["Confirm the requested deliverable exists and summarize its artifact ID."],
         }
         return common + specific[role]
 
@@ -617,6 +621,95 @@ class ProductionService:
         for event in events: event["data"] = _loads(event.pop("data_json"), {})
         return {**result, "tasks": tasks, "approvals": approvals, "events": events,
                 "operations": self.store.list_operations(session_id=session_id)}
+
+    def situation(self, session_id: str) -> dict[str, Any]:
+        """Return compact authoritative context intended for a small controller model."""
+        full = self.inspect(session_id)
+        active_tasks = [task for task in full["tasks"] if task["status"] in {"ready", "running", "pending"}]
+        operations = full["operations"]
+        pending_approvals = [item for item in full["approvals"] if item["status"] == "pending"]
+        allowed = ["inspect_capabilities", "create_task", "update_task", "steer", "pause", "cancel"]
+        if full["state"] == "active" and not full["generation_paused"]:
+            allowed += ["import_reference", "analyze", "generate_image", "generate_video", "evaluate", "render"]
+        if pending_approvals:
+            allowed += ["approve", "reject"]
+        return {
+            "session_id": session_id, "state": full["state"], "goal": full["goal"],
+            "request": full["request"], "usage": full["usage"], "budgets": full["budgets"],
+            "approval_policy": full["approval_policy"], "active_tasks": active_tasks,
+            "running_operations": [item for item in operations if item["state"] in {"queued", "running"}],
+            "recent_completed_operations": [item for item in operations if item["state"] == "succeeded"][-8:],
+            "recent_failed_operations": [item for item in operations if item["state"] in {"failed", "cancelled"}][-5:],
+            "pending_approvals": pending_approvals, "recent_steering": full["steering"][-5:],
+            "allowed_actions": allowed,
+            "controller_rule": "Choose one smallest sufficient next action; do not replay an unchanged failed request.",
+        }
+
+    def create_task(self, session_id: str, request: ProductionTaskRequest) -> dict[str, Any]:
+        for artifact_id in request.input_artifact_ids:
+            self.store.artifact(artifact_id)
+        with self.store.connect() as connection:
+            if connection.execute("SELECT id FROM production_sessions WHERE id=?", (session_id,)).fetchone() is None:
+                raise KeyError("production session not found")
+            existing = connection.execute(
+                "SELECT id FROM production_tasks WHERE session_id=? AND json_extract(requirements_json, '$.idempotency_key')=?",
+                (session_id, request.idempotency_key),
+            ).fetchone()
+            if existing:
+                return self.situation(session_id)
+            known = {row[0] for row in connection.execute("SELECT id FROM production_tasks WHERE session_id=?", (session_id,))}
+            if not set(request.dependency_task_ids) <= known:
+                raise ValueError("every dependency must be a task in this production session")
+            completed = {row[0] for row in connection.execute(
+                "SELECT id FROM production_tasks WHERE session_id=? AND status='completed'", (session_id,)
+            )}
+            status = "ready" if set(request.dependency_task_ids) <= completed else "pending"
+            task_id, now = uuid.uuid4().hex, utc_now()
+            requirements = {
+                "objective": request.objective, "acceptance_criteria": request.acceptance_criteria,
+                "input_artifact_ids": request.input_artifact_ids,
+                "instructions": self._instructions(request.stage), "idempotency_key": request.idempotency_key,
+            }
+            connection.execute(
+                "INSERT INTO production_tasks VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (task_id, session_id, request.stage, status, json.dumps(requirements),
+                 json.dumps(request.dependency_task_ids), json.dumps(request.input_artifact_ids), "{}", None, now, now),
+            )
+            self._event(connection, session_id, "task_created", {"task_id": task_id, "stage": request.stage})
+        return self.situation(session_id)
+
+    def invalidate_task(self, session_id: str, task_id: str, reason: str) -> dict[str, Any]:
+        """Invalidate one task and every transitive dependent while preserving unrelated work."""
+        with self.store.connect() as connection:
+            rows = connection.execute("SELECT * FROM production_tasks WHERE session_id=?", (session_id,)).fetchall()
+            tasks = {row["id"]: row for row in rows}
+            if task_id not in tasks:
+                raise KeyError("production task not found")
+            invalid = {task_id}
+            changed = True
+            while changed:
+                changed = False
+                for candidate in rows:
+                    if candidate["id"] not in invalid and set(_loads(candidate["dependency_ids_json"], [])) & invalid:
+                        invalid.add(candidate["id"])
+                        changed = True
+            artifact_ids: set[str] = set()
+            for invalid_id in invalid:
+                artifact_ids.update(_loads(tasks[invalid_id]["artifact_ids_json"], []))
+                connection.execute(
+                    "UPDATE production_tasks SET status='invalidated', invalidated_reason=?, updated_at=? WHERE id=?",
+                    (reason, utc_now(), invalid_id),
+                )
+            for artifact_id in artifact_ids:
+                connection.execute(
+                    "UPDATE media_artifacts SET disposition='superseded', user_notes=? WHERE id=?", (reason, artifact_id)
+                )
+            self._event(connection, session_id, "tasks_invalidated", {
+                "root_task_id": task_id, "task_ids": sorted(invalid),
+                "artifact_ids": sorted(artifact_ids), "reason": reason,
+            })
+        return self.situation(session_id)
+
 
     def update_task(self, session_id: str, task_id: str, status: str, handoff: dict[str, Any], artifact_ids: list[str],
                     invalidated_reason: str | None = None) -> dict[str, Any]:
