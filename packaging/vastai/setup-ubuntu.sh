@@ -16,10 +16,22 @@ COMFY_DIR="${VVS_COMFY_DIR:-$ROOT/ComfyUI}"
 APP_DIR="${VVS_APP_DIR:-$ROOT/vertical-video-studio}"
 DATA_DIR="${VVS_DATA_DIR:-$ROOT/data}"
 MODE="${VVS_EXECUTION_MODE:-simulation}"
+PYTHON_BIN="${VVS_PYTHON:-python3}"
 
 $SUDO apt-get update
-$SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  ca-certificates curl git jq ripgrep ffmpeg python3 python3-venv python3-pip build-essential aria2
+$SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  ca-certificates curl git jq ripgrep ffmpeg python3 python3-venv python3-pip \
+  build-essential aria2 software-properties-common
+
+if ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))'; then
+  $SUDO add-apt-repository -y ppa:deadsnakes/ppa
+  $SUDO apt-get update
+  $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    python3.11 python3.11-venv python3.11-dev
+  PYTHON_BIN=python3.11
+fi
+
+"$PYTHON_BIN" -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11 or newer is required"'
 
 $SUDO mkdir -p "$ROOT"
 $SUDO chown -R "$TARGET_USER":"$TARGET_USER" "$ROOT"
@@ -31,7 +43,7 @@ fi
 if [[ ! -d "$COMFY_DIR/.git" ]]; then
   git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git "$COMFY_DIR"
 fi
-python3 -m venv "$COMFY_DIR/.venv"
+"$PYTHON_BIN" -m venv "$COMFY_DIR/.venv"
 "$COMFY_DIR/.venv/bin/pip" install --upgrade pip wheel
 "$COMFY_DIR/.venv/bin/pip" install -r "$COMFY_DIR/requirements.txt"
 
@@ -42,7 +54,7 @@ elif [[ ! -d "$APP_DIR/.git" ]]; then
   exit 2
 fi
 git -C "$APP_DIR" switch "$BRANCH"
-python3 -m venv "$APP_DIR/.venv"
+"$PYTHON_BIN" -m venv "$APP_DIR/.venv"
 "$APP_DIR/.venv/bin/pip" install --upgrade pip wheel
 "$APP_DIR/.venv/bin/pip" install -e "$APP_DIR"
 

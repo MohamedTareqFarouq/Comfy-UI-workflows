@@ -19,7 +19,7 @@
       "group": "flux",
       "directory": "text_encoders",
       "file": "qwen_3_4b.safetensors",
-      "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/flux2-klein/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors",
       "sha256": null
     },
     {

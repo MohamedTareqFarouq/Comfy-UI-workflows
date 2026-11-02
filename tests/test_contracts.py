@@ -838,3 +838,21 @@ def test_model_manifest_covers_every_workflow_model() -> None:
     assert referenced <= declared
     assert len(manifest["comfy_models"]) == 9
     assert all(item["url"].startswith("https://huggingface.co/") for item in manifest["comfy_models"])
+
+
+def test_flux_t2i_workflow_uses_flux2_encoder_contract() -> None:
+    root = Path(__file__).parents[1]
+    graph = json.loads((root / "workflows" / "flux_t2i_api.json").read_text())
+    assert "nodes" not in graph
+    assert graph["2"]["class_type"] == "CLIPLoader"
+    assert graph["2"]["inputs"] == {
+        "clip_name": "qwen_3_4b.safetensors",
+        "type": "flux2",
+        "device": "default",
+    }
+    manifest = json.loads((root / "config" / "models.json").read_text())
+    qwen = next(
+        item for item in manifest["comfy_models"]
+        if item["file"] == "qwen_3_4b.safetensors"
+    )
+    assert "/Comfy-Org/flux2-klein/" in qwen["url"]
