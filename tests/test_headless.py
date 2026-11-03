@@ -20,6 +20,7 @@ from vertical_studio.headless_schemas import (
     VideoGenerationRequest,
 )
 from vertical_studio.services.media import run_ffmpeg
+from vertical_studio.services.gpu import GpuCoordinator
 from vertical_studio.mcp_server import build_mcp
 
 
@@ -44,6 +45,25 @@ def wait_for(service: HeadlessMediaService, operation_id: str) -> dict:
             return operation
         service.run_once()
     raise AssertionError("operation did not finish")
+
+
+def test_real_comfy_gpu_ownership_allows_no_qwen_gateway() -> None:
+    class Generator:
+        def __init__(self) -> None:
+            self.free_calls = 0
+
+        def free_memory(self) -> None:
+            self.free_calls += 1
+
+    generator = Generator()
+    coordinator = GpuCoordinator(generator, None, simulation=False)
+    with coordinator.comfy(reset_models=False):
+        pass
+    assert generator.free_calls == 0
+
+    with pytest.raises(RuntimeError, match="without a model gateway"):
+        with coordinator.qwen():
+            pass
 
 
 def test_capability_router_is_deterministic_and_rejects_control_loss(headless) -> None:

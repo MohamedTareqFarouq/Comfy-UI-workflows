@@ -11,6 +11,7 @@ from .config import Settings
 from .diagnostics import diagnose
 from .schemas import utc_now
 from .services.comfy import ComfyClient, GenerationError
+from .services.gpu import GpuCoordinator
 from .services.media import probe_media, sha256_file
 from .services.qa import QualityService
 
@@ -249,10 +250,13 @@ class QualificationService:
         sampler = ResourceSampler()
         try:
             with sampler:
-                result = (
-                    generator.generate_capability_video(output, payload)
-                    if video else generator.generate_capability_image(output, payload)
-                )
+                # Exercise the same GPU-ownership boundary used by HeadlessMediaService,
+                # not only the lower-level Comfy adapter.
+                with GpuCoordinator(generator, None, simulation=False).comfy(reset_models=False):
+                    result = (
+                        generator.generate_capability_video(output, payload)
+                        if video else generator.generate_capability_image(output, payload)
+                    )
             first = result.files[0] if result.files else None
             return ({
                 "kind": "video" if video else "image",

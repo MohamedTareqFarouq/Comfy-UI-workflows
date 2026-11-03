@@ -11,7 +11,7 @@ from .model_gateway import ModelGateway
 class GpuCoordinator:
     """Serializes ComfyUI and managed llama.cpp ownership of one GPU."""
 
-    def __init__(self, generator: Generator, model: ModelGateway, *, simulation: bool):
+    def __init__(self, generator: Generator, model: ModelGateway | None, *, simulation: bool):
         self.generator = generator
         self.model = model
         self.simulation = simulation
@@ -21,6 +21,8 @@ class GpuCoordinator:
     def qwen(self) -> Iterator[None]:
         with self._lock:
             if not self.simulation:
+                if self.model is None:
+                    raise RuntimeError("Qwen GPU ownership requested without a model gateway")
                 self.generator.free_memory()
                 self.model.ensure_available()
             try:
@@ -33,7 +35,8 @@ class GpuCoordinator:
     def comfy(self, *, reset_models: bool = True) -> Iterator[None]:
         with self._lock:
             if not self.simulation:
-                self.model.unload()
+                if self.model is not None:
+                    self.model.unload()
                 if reset_models:
                     self.generator.free_memory()
             yield
