@@ -68,6 +68,31 @@ def test_multireference_workflows_and_maps_are_valid_json() -> None:
             assert all(str(pointer["node_id"]) in graph for pointer in pointers)
 
 
+def test_registered_t2i_and_wan_workflow_mappings_target_real_nodes() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow_dir = root / "workflows"
+    mappings = json.loads((workflow_dir / "workflow_maps.json").read_text())
+    required = {
+        "flux_t2i_api": {"prompt", "seed", "width", "height", "output_prefix"},
+        "wan22_i2v_api": {
+            "prompt", "negative_prompt", "seed", "width", "height", "frames",
+            "start_image", "output_prefix",
+        },
+        "wan14b_lightx2v_flf2v_api": {
+            "prompt", "negative_prompt", "seed", "width", "height", "frames",
+            "start_image", "end_image", "output_prefix",
+        },
+    }
+    for name, keys in required.items():
+        graph = json.loads((workflow_dir / f"{name}.json").read_text())
+        assert keys <= set(mappings[name])
+        for key in keys:
+            pointers = mappings[name][key]
+            if isinstance(pointers, dict):
+                pointers = [pointers]
+            assert all(str(pointer["node_id"]) in graph for pointer in pointers)
+
+
 def test_storyboard_enforces_endpoint_environment_continuity() -> None:
     assets = [
         {"key": "leo", "role": "character", "label": "Leo", "prompt": "Leo alone"},
@@ -755,13 +780,13 @@ def test_real_wan_workflow_binds_start_and_end_nodes_in_order(
         (str(patch["node_id"]), patch["input"]): patch["value"]
         for patch in captured["patches"]
     }
-    assert patches[("68", "image")] == "uploaded-start.png"
-    assert patches[("62", "image")] == "uploaded-end.png"
+    assert patches[("80", "image")] == "uploaded-start.png"
+    assert patches[("89", "image")] == "uploaded-end.png"
     audit = result.metadata["prompt_audit"]
     assert audit["start_artifact_id"] == "start-artifact"
     assert audit["end_artifact_id"] == "end-artifact"
-    assert audit["comfy_inputs"]["start"]["node_id"] == "68"
-    assert audit["comfy_inputs"]["end"]["node_id"] == "62"
+    assert audit["comfy_inputs"]["start"]["node_id"] == "80"
+    assert audit["comfy_inputs"]["end"]["node_id"] == "89"
 
 
 def test_wan_prompt_enforces_project_style(monkeypatch, tmp_path: Path) -> None:

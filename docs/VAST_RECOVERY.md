@@ -100,6 +100,22 @@ Start the services in separate SSH terminals:
 /opt/vertical-media/start-opencode.sh
 ```
 
+Before asking OpenCode to generate media, qualify the registered capability
+adapters directly against ComfyUI:
+
+```bash
+cd /opt/vertical-media/vertical-video-studio
+source /opt/vertical-media/env
+./scripts/qualify.sh smoke
+```
+
+This test does not use the OpenCode agent. It exercises Flux T2I, Flux
+one-through-four-reference generation, Wan I2V, and Wan FLF2V through the same
+adapter methods exposed by MCP. Successful capability IDs are saved in
+`/opt/vertical-media/data/qualification/latest.json`; real-mode MCP will expose
+only those qualified capabilities as executable. The smoke run performs real
+GPU generation and therefore takes time and consumes compute.
+
 If OpenCode cannot start the MCP server, ensure `opencode.json` points to:
 
 ```text

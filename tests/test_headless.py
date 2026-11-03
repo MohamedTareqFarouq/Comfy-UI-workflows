@@ -55,6 +55,22 @@ def test_capability_router_is_deterministic_and_rejects_control_loss(headless) -
         headless.registry.route_image([reference], "flux_klein.t2i.v1")
 
 
+def test_real_registry_uses_persisted_per_capability_qualification(tmp_path: Path) -> None:
+    repo = Path(__file__).resolve().parents[1]
+    data = tmp_path / "data"
+    report = data / "qualification" / "latest.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({"qualified_capabilities": ["flux_klein.t2i.v1"]}))
+    settings = Settings(
+        data_dir=data, db_path=data / "studio.sqlite3", projects_dir=data / "projects",
+        export_dir=data / "exports", static_dir=repo / "src" / "vertical_studio" / "static",
+        workflows_dir=repo / "workflows", execution_mode="real",
+    )
+    service = HeadlessMediaService(settings)
+    assert service.registry.get("flux_klein.t2i.v1").qualification_state == "qualified"
+    assert service.registry.get("wan22.i2v.v1").qualification_state == "unqualified"
+
+
 def test_image_operation_is_idempotent_and_records_lineage(headless) -> None:
     request = ImageGenerationRequest(
         prompt="portrait test", width=270, height=480, seed=7,

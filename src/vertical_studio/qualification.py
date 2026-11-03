@@ -125,10 +125,15 @@ class QualificationService:
             )
 
         required = [
-            self.settings.workflows_dir / "flux_t2i_api.json",
-            self.settings.workflows_dir / "image_flux2_klein_image_edit_4b_distilled_api.json",
-            self.settings.workflows_dir / "flux_edit_api.json",
-            self.settings.workflows_dir / "wan14b_lightx2v_flf2v_api.json",
+            self.settings.workflows_dir / name
+            for name in (
+                "flux_t2i_api.json",
+                "flux_klein_multiref_1_api.json",
+                "flux_klein_multiref_2_api.json",
+                "wan22_i2v_api.json",
+                "wan14b_lightx2v_flf2v_api.json",
+                "workflow_maps.json",
+            )
         ]
         missing = [str(path) for path in required if not path.exists()]
         if missing:
@@ -137,80 +142,139 @@ class QualificationService:
                 + ", ".join(missing)
             )
 
-        payload_path = self.settings.workflows_dir / "qualification_payloads.json"
-        if not payload_path.exists():
-            raise QualificationError(
-                "qualification_payloads.json is required to map prompts, dimensions, "
-                "start/end images, seeds and output nodes for this exact ComfyUI export"
-            )
-        payloads = json.loads(payload_path.read_text())
-        flux_t2i_payload = payloads.get("flux_t2i") or payloads.get("flux")
-        flux_edit_single_payload = payloads.get("flux_edit_single")
-        flux_edit_payload = payloads.get("flux_edit")
-        wan_payloads = payloads.get("wan_candidates", [])
-        if (
-            not isinstance(flux_t2i_payload, dict)
-            or not isinstance(flux_edit_single_payload, dict)
-            or not isinstance(flux_edit_payload, dict)
-            or not wan_payloads
-        ):
-            raise QualificationError(
-                "qualification_payloads.json must contain flux_t2i, flux_edit_single, "
-                "flux_edit and wan_candidates"
-            )
-        if level == "full" and len(wan_payloads) < len(self.CANDIDATES):
-            raise QualificationError(
-                "full qualification requires all three ordered Wan candidate payloads"
-            )
-
         generator = ComfyClient(self.settings.comfy_url, self.settings.workflows_dir)
         health = generator.health()
         if not health.get("available"):
             raise QualificationError(f"ComfyUI is unavailable: {health}")
 
         run_dir = self.settings.data_dir / "qualification" / utc_now().replace(":", "-")
+        qualified: list[str] = []
         try:
-            report["runs"].append(
-                self._run_flux(generator, flux_t2i_payload, run_dir / "flux-t2i", "flux_t2i")
+            common = {
+                "prompt": "Qualification image: a red sphere on a neutral background",
+                "negative_prompt": "text, watermark, distortion",
+                "seed": 12345, "width": 384, "height": 672,
+                "candidate_count": 1,
+            }
+            t2i_id = "flux_klein.t2i.v1"
+            t2i_run, reference = self._run_registered(
+                generator, t2i_id,
+                {**common, "operation_id": "qualification-t2i", "capability_id": t2i_id,
+                 "resolved_references": []},
+                run_dir / "flux-t2i", video=False,
             )
-            report["runs"].append(
-                self._run_flux(
-                    generator, flux_edit_single_payload,
-                    run_dir / "flux-edit-single", "flux_edit_single",
-                )
-            )
-            report["runs"].append(
-                self._run_flux(generator, flux_edit_payload, run_dir / "flux-edit", "flux_edit")
-            )
-            selected = wan_payloads[:1] if level == "smoke" else wan_payloads
-            for index, payload in enumerate(selected):
-                expected = self.CANDIDATES[index]
-                actual = {
-                    key: int(payload.get(key, -1))
-                    for key in ("width", "height", "frames")
+            report["runs"].append(t2i_run)
+            if t2i_run["qualified"]:
+                qualified.append(t2i_id)
+
+            if reference is not None:
+                reference_item = {
+                    "artifact_id": "qualification-reference", "role": "identity",
+                    "path": str(reference), "sha256": sha256_file(reference),
                 }
-                if actual != expected:
-                    raise QualificationError(
-                        f"Wan candidate {index + 1} must be {expected}, got {actual}"
-                    )
-                generator.free_memory()
-                report["runs"].append(
-                    self._run_wan(
-                        generator,
-                        payload,
-                        run_dir / f"wan-{actual['width']}x{actual['height']}-{actual['frames']}",
-                    )
+                single_id = "flux_klein.single_reference.v1"
+                run, _ = self._run_registered(
+                    generator, single_id,
+                    {**common, "operation_id": f"qualification-{single_id}",
+                     "capability_id": single_id, "resolved_references": [reference_item]},
+                    run_dir / single_id, video=False,
                 )
+                report["runs"].append(run)
+                if run["qualified"]:
+                    qualified.append(single_id)
+
+                multi_id = "flux_klein.multi_reference.v1"
+                multi_passed = True
+                roles = ("identity", "style", "environment", "prop")
+                for count in (2, 3, 4):
+                    references = [
+                        {**reference_item, "artifact_id": f"qualification-reference-{index}",
+                         "role": roles[index - 1]}
+                        for index in range(1, count + 1)
+                    ]
+                    run, _ = self._run_registered(
+                        generator, multi_id,
+                        {**common, "operation_id": f"qualification-{multi_id}-{count}",
+                         "capability_id": multi_id, "resolved_references": references},
+                        run_dir / f"{multi_id}-{count}", video=False,
+                    )
+                    report["runs"].append(run)
+                    multi_passed = multi_passed and bool(run["qualified"])
+                if multi_passed:
+                    qualified.append(multi_id)
+
+                video_common = {
+                    "prompt": "The sphere rotates slowly", "negative_prompt": "jitter, text",
+                    "motion_description": "gentle rotation", "camera_description": "locked camera",
+                    "seed": 12345, "width": 384, "height": 672, "frames": 49,
+                    "fps": 16, "candidate_count": 1,
+                }
+                start = {**reference_item, "role": "start_frame"}
+                for capability_id, references in (
+                    ("wan22.i2v.v1", [start]),
+                    ("wan22.flf2v.v1", [start, {**reference_item, "role": "end_frame"}]),
+                ):
+                    generator.free_memory()
+                    run, _ = self._run_registered(
+                        generator, capability_id,
+                        {**video_common, "operation_id": f"qualification-{capability_id}",
+                         "capability_id": capability_id, "resolved_references": references},
+                        run_dir / capability_id, video=True,
+                    )
+                    report["runs"].append(run)
+                    if run["qualified"]:
+                        qualified.append(capability_id)
         finally:
             generator.free_memory()
 
-        report["qualified"] = all(run.get("qualified") for run in report["runs"])
+        expected = {
+            "flux_klein.t2i.v1", "flux_klein.single_reference.v1",
+            "flux_klein.multi_reference.v1", "wan22.i2v.v1", "wan22.flf2v.v1",
+        }
+        report["qualified_capabilities"] = sorted(qualified)
+        report["qualified"] = expected <= set(qualified)
         report["message"] = (
             "Selected qualification completed."
             if report["qualified"]
             else "Qualification completed with one or more failed profiles."
         )
         return self._save(report)
+
+    def _run_registered(
+        self, generator: ComfyClient, capability_id: str, payload: dict[str, Any],
+        output: Path, *, video: bool,
+    ) -> tuple[dict[str, Any], Path | None]:
+        """Run the same registered adapter used by the MCP, without involving an agent."""
+        started = time.monotonic()
+        sampler = ResourceSampler()
+        try:
+            with sampler:
+                result = (
+                    generator.generate_capability_video(output, payload)
+                    if video else generator.generate_capability_image(output, payload)
+                )
+            first = result.files[0] if result.files else None
+            return ({
+                "kind": "video" if video else "image",
+                "capability_id": capability_id,
+                "qualified": first is not None,
+                "duration_seconds": time.monotonic() - started,
+                "resources": sampler.metrics,
+                "outputs": [
+                    {"path": str(path), "sha256": sha256_file(path), "probe": probe_media(path)}
+                    for path in result.files
+                ],
+                "comfy_prompt_id": result.metadata.get("prompt_id"),
+            }, first)
+        except (GenerationError, OSError) as exc:
+            return ({
+                "kind": "video" if video else "image",
+                "capability_id": capability_id,
+                "qualified": False,
+                "duration_seconds": time.monotonic() - started,
+                "resources": sampler.metrics,
+                "error": {"code": getattr(exc, "code", "io_error"), "message": str(exc)},
+            }, None)
 
     def _run_flux(
         self, generator: ComfyClient, payload: dict[str, Any], output: Path,

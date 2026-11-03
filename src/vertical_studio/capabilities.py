@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from pathlib import Path
 
 from .headless_schemas import (
@@ -101,19 +102,30 @@ def _capabilities() -> list[Capability]:
 
 
 class CapabilityRegistry:
-    def __init__(self, workflows_dir: Path, *, simulation: bool = True):
+    def __init__(self, workflows_dir: Path, *, simulation: bool = True,
+                 qualification_report: Path | None = None):
         self.workflows_dir = workflows_dir
         self.simulation = simulation
+        self.qualification_report = qualification_report
         self._items = {item.id: item for item in _capabilities()}
         self._refresh_states()
 
     def _refresh_states(self) -> None:
+        qualified: set[str] = set()
+        if not self.simulation and self.qualification_report and self.qualification_report.exists():
+            try:
+                report = json.loads(self.qualification_report.read_text())
+                qualified = set(report.get("qualified_capabilities", []))
+            except (OSError, ValueError, TypeError):
+                qualified = set()
         for item in self._items.values():
             if self.simulation:
                 item.qualification_state = QualificationState.QUALIFIED
             elif item.workflow_template and not (self.workflows_dir / item.workflow_template).exists():
                 item.qualification_state = QualificationState.UNAVAILABLE
             elif item.media_type in {MediaType.RENDER}:
+                item.qualification_state = QualificationState.QUALIFIED
+            elif item.id in qualified:
                 item.qualification_state = QualificationState.QUALIFIED
             else:
                 item.qualification_state = QualificationState.UNQUALIFIED

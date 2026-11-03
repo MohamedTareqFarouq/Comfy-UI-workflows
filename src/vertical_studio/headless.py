@@ -147,7 +147,11 @@ class HeadlessMediaService:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.store = HeadlessStore(settings.db_path)
-        self.registry = CapabilityRegistry(settings.workflows_dir, simulation=settings.is_simulation)
+        self.registry = CapabilityRegistry(
+            settings.workflows_dir,
+            simulation=settings.is_simulation,
+            qualification_report=settings.data_dir / "qualification" / "latest.json",
+        )
         self.generator = MockComfyClient() if settings.is_simulation else ComfyClient(settings.comfy_url, settings.workflows_dir)
         self.qa = QualityService(enable_visual_review=False)
         self.gpu = GpuCoordinator(self.generator, None, simulation=settings.is_simulation)

@@ -97,4 +97,5 @@ fi
 echo "Installation complete."
 echo "Terminal 1: $ROOT/start-comfy.sh"
 echo "Terminal 2: $ROOT/start-opencode.sh"
+echo "After ComfyUI is healthy: cd $APP_DIR && ./scripts/qualify.sh smoke"
 echo "OpenCode will load the vertical-producer agent and local MCP server."

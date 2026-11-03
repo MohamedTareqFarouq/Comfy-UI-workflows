@@ -14,10 +14,11 @@ workflows/*_api.json
 !workflows/flux_klein_multiref_3_api.json
 !workflows/flux_klein_multiref_4_api.json
 !workflows/wan22_i2v_api.json
+!workflows/wan14b_lightx2v_flf2v_api.json
 !workflows/flux_t2i_api.json
 !workflows/profiles.json
 wheelhouse/
 .requirements-venv/
 *.log
-workflows/workflow_maps.json
+!workflows/workflow_maps.json
 workflows/qualification_payloads.json
