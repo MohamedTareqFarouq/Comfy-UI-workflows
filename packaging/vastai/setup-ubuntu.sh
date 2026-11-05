@@ -75,6 +75,9 @@ MODEL_MANIFEST="${VVS_MODEL_MANIFEST:-$APP_DIR/config/models.json}"
 if [[ "${VVS_SKIP_MODELS:-0}" != "1" ]]; then
   "$APP_DIR/scripts/install-model-manifest.sh" "$MODEL_MANIFEST" "$COMFY_DIR" all
 fi
+if [[ "${VVS_INSTALL_LTX23:-0}" == "1" ]]; then
+  "$APP_DIR/scripts/install-ltx23.sh" "$COMFY_DIR"
+fi
 
 cat > "$ROOT/start-comfy.sh" <<SH
 #!/usr/bin/env bash

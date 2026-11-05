@@ -745,12 +745,17 @@ class ComfyClient:
     def generate_capability_video(
         self, output_dir: Path, payload: dict[str, Any]
     ) -> GenerationResult:
-        """Run registered Wan I2V/FLF2V without accepting caller-provided patches."""
+        """Run a registered I2V/FLF2V capability without caller-provided patches."""
         capability_id = payload["capability_id"]
-        is_flf = capability_id == "wan22.flf2v.v1"
-        if capability_id not in {"wan22.i2v.v1", "wan22.flf2v.v1"}:
+        modes = {
+            "wan22.i2v.v1": ("wan22_i2v_api", False),
+            "wan22.flf2v.v1": ("wan14b_lightx2v_flf2v_api", True),
+            "ltx23.fast.i2v.v1": ("ltx23_fast_i2v_api", False),
+            "ltx23.fast.flf2v.v1": ("ltx23_fast_flf2v_api", True),
+        }
+        if capability_id not in modes:
             raise GenerationError("unsupported_capability", capability_id)
-        template = "wan14b_lightx2v_flf2v_api" if is_flf else "wan22_i2v_api"
+        template, is_flf = modes[capability_id]
         required = {
             "prompt", "negative_prompt", "seed", "width", "height", "frames",
             "start_image", "output_prefix",

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
-MANIFEST="${1:?usage: install-model-manifest.sh MANIFEST.json COMFYUI_DIR [all|flux|wan|wan-lightning]}"
-COMFY_DIR="${2:?usage: install-model-manifest.sh MANIFEST.json COMFYUI_DIR [all|flux|wan|wan-lightning]}"
+MANIFEST="${1:?usage: install-model-manifest.sh MANIFEST.json COMFYUI_DIR [all|flux|wan|wan-lightning|ltx23]}"
+COMFY_DIR="${2:?usage: install-model-manifest.sh MANIFEST.json COMFYUI_DIR [all|flux|wan|wan-lightning|ltx23]}"
 GROUP="${3:-all}"
 
 case "$GROUP" in
-  all|flux|wan|wan-lightning) ;;
-  *) echo "Choose all, flux, wan, or wan-lightning" >&2; exit 2 ;;
+  all|flux|wan|wan-lightning|ltx23) ;;
+  *) echo "Choose all, flux, wan, wan-lightning, or ltx23" >&2; exit 2 ;;
 esac
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 command -v aria2c >/dev/null || { echo "aria2c is required" >&2; exit 1; }
