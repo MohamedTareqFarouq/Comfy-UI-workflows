@@ -115,7 +115,7 @@ def test_video_modes_require_explicit_boundary_roles(headless, tmp_path: Path) -
         prompt="subtle motion", references=[ArtifactRef(artifact_id=start["id"], role="start_frame")],
         width=270, height=480, frames=16, fps=8, idempotency_key="video-i2v-0001",
     ))
-    assert i2v["capability_id"] == "ltx23.fast.i2v.v1"
+    assert i2v["capability_id"] == "wan22.i2v.v1"
     with pytest.raises(RoutingError) as error:
         headless.generate_video(VideoGenerationRequest(
             prompt="invalid forced FLF", references=[ArtifactRef(artifact_id=start["id"], role="start_frame")],

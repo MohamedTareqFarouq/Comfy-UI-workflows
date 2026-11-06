@@ -61,32 +61,6 @@ def _capabilities() -> list[Capability]:
             **common_image,
         ),
         Capability(
-            id="ltx23.fast.i2v.v1", version="1.0.0", media_type=MediaType.VIDEO,
-            mode="image_to_video", required_inputs=["prompt", "start_frame"],
-            optional_inputs=["negative_prompt", "motion_description", "camera_description", "seed"],
-            min_references=1, max_references=1, reference_roles=[ReferenceRole.START_FRAME],
-            model_family="LTX 2.3 Fast", model_files=["ltx-2.3-distilled-fp8", "gemma-3-12b"],
-            workflow_template="ltx23_fast_i2v_api.json", node_map="ltx23_fast_i2v_api",
-            constraints={"width": [256, 1920], "height": [256, 1920], "frames": [9, 241], "max_candidates": 2,
-                         "dimension_multiple": 32, "frame_rule": "8n+1"},
-            vram_profile="16gb_streamed", resource_class="gpu_video", execution_time_class="long",
-            limitations=["Local output may differ from the managed LTX Studio Fast preset.",
-                         "Initial integration preserves video only; generated audio is not retained."],
-        ),
-        Capability(
-            id="ltx23.fast.flf2v.v1", version="1.0.0", media_type=MediaType.VIDEO,
-            mode="first_last_frame_to_video", required_inputs=["prompt", "start_frame", "end_frame"],
-            optional_inputs=["negative_prompt", "motion_description", "camera_description", "seed"],
-            min_references=2, max_references=2,
-            reference_roles=[ReferenceRole.START_FRAME, ReferenceRole.END_FRAME],
-            model_family="LTX 2.3 Fast", model_files=["ltx-2.3-distilled-fp8", "gemma-3-12b"],
-            workflow_template="ltx23_fast_flf2v_api.json", node_map="ltx23_fast_flf2v_api",
-            constraints={"width": [256, 1920], "height": [256, 1920], "frames": [9, 241], "max_candidates": 2,
-                         "dimension_multiple": 32, "frame_rule": "8n+1"},
-            vram_profile="16gb_streamed", resource_class="gpu_video", execution_time_class="long",
-            limitations=["Requires a reviewed LTX 2.3 first/last-frame API export."],
-        ),
-        Capability(
             id="wan22.i2v.v1", version="1.0.0", media_type=MediaType.VIDEO,
             mode="image_to_video", required_inputs=["prompt", "start_frame"],
             optional_inputs=["negative_prompt", "motion_description", "camera_description", "seed"],
@@ -202,15 +176,8 @@ class CapabilityRegistry:
     def route_video(self, references: list[ArtifactRef], preferred: str | None = None) -> Capability:
         roles = [item.role for item in references]
         is_flf = ReferenceRole.END_FRAME in roles
-        if preferred:
-            capability = self.require_executable(preferred)
-        else:
-            ltx = "ltx23.fast.flf2v.v1" if is_flf else "ltx23.fast.i2v.v1"
-            wan = "wan22.flf2v.v1" if is_flf else "wan22.i2v.v1"
-            try:
-                capability = self.require_executable(ltx)
-            except RoutingError:
-                capability = self.require_executable(wan)
+        selected = preferred or ("wan22.flf2v.v1" if is_flf else "wan22.i2v.v1")
+        capability = self.require_executable(selected)
         expected = ({ReferenceRole.START_FRAME, ReferenceRole.END_FRAME}
                     if capability.mode == "first_last_frame_to_video" else {ReferenceRole.START_FRAME})
         conflicts = []

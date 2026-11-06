@@ -154,6 +154,38 @@ ssh -N \
 Replace `49374` if `opencode pair` prints another port. SSH forwarding is
 preferred to exposing ComfyUI or OpenCode publicly.
 
+## Reference-video recreation
+
+OpenCode's web chat accepts still-image attachments, but it does not pass video
+or audio attachments to a model. For a video reference, start the VVS browser
+application on the instance and forward its local-only port in the same SSH
+tunnel:
+
+```bash
+cd /opt/vertical-media/vertical-video-studio
+VVS_EXECUTION_MODE=real ./start.sh --host 127.0.0.1 --port 8765
+```
+
+```bash
+ssh -N -p VAST_SSH_PORT \
+  -L 8188:127.0.0.1:8188 \
+  -L 8765:127.0.0.1:8765 \
+  -L 49374:127.0.0.1:49374 \
+  root@VAST_PUBLIC_IP
+```
+
+Open `http://127.0.0.1:8765`, create a project with **Start from a reference
+video**, and select the local MP4, MOV, WebM, MKV, or M4V file. The service
+accepts an approximately 10–30 second video (up to 250 MB), copies it into
+managed Vast storage, samples evidence frames, and performs reference analysis
+before it creates the storyboard and Wan generation plan. The OpenCode MCP
+server remains unchanged: it is started automatically when OpenCode starts.
+
+For still-image visual planning, pair OpenCode as above, open its local web UI,
+and drag the image into the prompt using a vision-capable model. Uploading an
+image to OpenCode is separate from registering it as a generation reference;
+use the VVS project workflow or `media_import_reference` for the latter.
+
 ## Enable real generation
 
 After every model download completes:

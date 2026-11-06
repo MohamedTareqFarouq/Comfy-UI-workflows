@@ -75,10 +75,6 @@ MODEL_MANIFEST="${VVS_MODEL_MANIFEST:-$APP_DIR/config/models.json}"
 if [[ "${VVS_SKIP_MODELS:-0}" != "1" ]]; then
   "$APP_DIR/scripts/install-model-manifest.sh" "$MODEL_MANIFEST" "$COMFY_DIR" all
 fi
-if [[ "${VVS_INSTALL_LTX23:-0}" == "1" ]]; then
-  "$APP_DIR/scripts/install-ltx23.sh" "$COMFY_DIR"
-fi
-
 cat > "$ROOT/start-comfy.sh" <<SH
 #!/usr/bin/env bash
 exec "$COMFY_DIR/.venv/bin/python" "$COMFY_DIR/main.py" --listen 127.0.0.1 --port 8188

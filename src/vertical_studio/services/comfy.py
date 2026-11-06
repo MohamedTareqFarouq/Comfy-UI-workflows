@@ -750,8 +750,6 @@ class ComfyClient:
         modes = {
             "wan22.i2v.v1": ("wan22_i2v_api", False),
             "wan22.flf2v.v1": ("wan14b_lightx2v_flf2v_api", True),
-            "ltx23.fast.i2v.v1": ("ltx23_fast_i2v_api", False),
-            "ltx23.fast.flf2v.v1": ("ltx23_fast_flf2v_api", True),
         }
         if capability_id not in modes:
             raise GenerationError("unsupported_capability", capability_id)
