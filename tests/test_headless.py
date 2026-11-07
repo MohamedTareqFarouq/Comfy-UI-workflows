@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from vertical_studio.capabilities import RoutingError
+from vertical_studio.cli import main as cli_main
 from vertical_studio.config import Settings
 from vertical_studio.headless import HeadlessMediaService, ProductionService
 from vertical_studio.headless_schemas import (
@@ -194,6 +195,7 @@ def test_mcp_exposes_atomic_and_production_control_contract(headless) -> None:
             "media_list_capabilities", "media_generate_image", "media_generate_video",
             "media_evaluate", "media_render_sequence", "media_cancel_operation",
             "production_start", "production_update_task", "production_request_approval",
+            "production_resolve_approval",
             "production_cancel", "production_emergency_stop", "production_steer",
             "production_get_situation", "production_create_task", "production_invalidate_task",
         } <= names
@@ -232,6 +234,96 @@ def test_mcp_marks_simulated_generation_in_status_operation_and_artifact(headles
         assert "prompt_id" not in artifact["metadata"]
     finally:
         service.stop()
+
+
+def test_approval_decision_can_be_recovered_by_id(headless) -> None:
+    server, service = build_mcp(headless.settings)
+    try:
+        session = ProductionService(service).start(ProductionStartRequest(
+            goal="Approve one image", user_prompt="Create the requested image",
+            idempotency_key="approval-recovery-session-001",
+        ))
+        image_request = ImageGenerationRequest(
+            prompt="Approved test image", width=256, height=256, seed=7,
+            production_session_id=session["id"], idempotency_key="approval-recovery-image-001",
+        )
+        operation_spec = {
+            "capability_id": "flux_klein.t2i.v1",
+            "request": image_request.model_dump(mode="json"),
+        }
+        requested = asyncio.run(server.call_tool("production_request_approval", {
+            "production_session_id": session["id"],
+            "operation_spec": operation_spec,
+            "reason": "Render the approved sequence",
+            "dependencies": [],
+            "affected_shots": ["shot-1"],
+            "attempt": 1,
+            "remaining_budget": {},
+        })).model_dump(mode="json", by_alias=True)["structuredContent"]
+        assert requested["created_approval_status"] == "pending"
+        approval_id = requested["approvals"][-1]["id"]
+
+        with pytest.raises(Exception, match="does not belong to production session"):
+            asyncio.run(server.call_tool("production_approve", {
+                "production_session_id": "wrong-session-id",
+                "approval_id": approval_id,
+                "reason": "user approved",
+            }))
+
+        resolved = asyncio.run(server.call_tool("production_resolve_approval", {
+            "approval_id": approval_id,
+            "decision": "approved",
+            "reason": "user approved",
+        })).model_dump(mode="json", by_alias=True)["structuredContent"]
+        assert next(item for item in resolved["approvals"] if item["id"] == approval_id)["status"] == "approved"
+
+        repeated = asyncio.run(server.call_tool("production_resolve_approval", {
+            "approval_id": approval_id,
+            "decision": "approved",
+            "reason": "repeat delivery",
+        })).model_dump(mode="json", by_alias=True)["structuredContent"]
+        assert next(item for item in repeated["approvals"] if item["id"] == approval_id)["status"] == "approved"
+
+        queued = service.generate_image(image_request)
+        assert queued["state"] == "queued"
+        with service.store.connect() as connection:
+            status = connection.execute(
+                "SELECT status FROM production_approvals WHERE id=?", (approval_id,)
+            ).fetchone()[0]
+        assert status == "consumed"
+    finally:
+        service.stop()
+
+
+def test_cli_manually_approves_existing_request(headless, monkeypatch, capsys) -> None:
+    production = ProductionService(headless)
+    session = production.start(ProductionStartRequest(
+        goal="Manual approval test", user_prompt="Approve the operation",
+        idempotency_key="manual-approval-session-001",
+    ))
+    operation_spec = {"capability_id": "flux_klein.t2i.v1", "request": {"prompt": "test"}}
+    canonical = json.dumps(operation_spec, sort_keys=True, separators=(",", ":"))
+    approval_id = "manual-approval-record-001"
+    with headless.store.connect() as connection:
+        connection.execute(
+            "INSERT INTO production_approvals VALUES(?,?,?,?,?,?,?,?)",
+            (approval_id, session["id"], hashlib.sha256(canonical.encode()).hexdigest(),
+             json.dumps(operation_spec), "pending", "", "now", None),
+        )
+
+    monkeypatch.setenv("VVS_DATA_DIR", str(headless.settings.data_dir))
+    monkeypatch.setenv("VVS_EXECUTION_MODE", "simulation")
+    monkeypatch.setattr("sys.argv", [
+        "vertical-studio", "approval", approval_id, "approved", "--reason", "manual fallback",
+    ])
+    assert cli_main() == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output == {
+        "production_session_id": session["id"],
+        "approval_id": approval_id,
+        "status": "approved",
+        "reason": "manual fallback",
+    }
 
 
 def test_mcp_input_schemas_are_described_and_calls_are_traced(headless) -> None:

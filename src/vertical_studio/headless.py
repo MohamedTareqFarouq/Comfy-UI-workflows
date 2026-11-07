@@ -560,9 +560,11 @@ class HeadlessMediaService:
 class ProductionService:
     STAGES = ("analyze", "plan", "asset", "image", "video", "qa", "repair", "render", "finish")
 
-    def __init__(self, media: HeadlessMediaService):
+    def __init__(self, media: HeadlessMediaService | None = None, *, store: HeadlessStore | None = None):
+        if media is None and store is None:
+            raise ValueError("media or store is required")
         self.media = media
-        self.store = media.store
+        self.store = store or media.store
 
     def start(self, request: ProductionStartRequest) -> dict[str, Any]:
         for artifact_id in request.reference_artifact_ids: self.store.artifact(artifact_id)
@@ -760,14 +762,44 @@ class ProductionService:
         return self.inspect(session_id)["approvals"]
 
     def decide_approval(self, session_id: str, approval_id: str, approved: bool, reason: str) -> dict[str, Any]:
+        target_status = "approved" if approved else "rejected"
         with self.store.connect() as connection:
+            approval = connection.execute(
+                "SELECT session_id, status FROM production_approvals WHERE id=?", (approval_id,)
+            ).fetchone()
+            if approval is None:
+                raise KeyError(f"approval not found: {approval_id}")
+            if approval["session_id"] != session_id:
+                raise ValueError("approval does not belong to production session")
+            if approval["status"] == target_status:
+                return self.inspect(session_id)
+            if approval["status"] != "pending":
+                raise ValueError(
+                    f"approval is already {approval['status']}; it cannot be changed to {target_status}"
+                )
             changed = connection.execute(
                 "UPDATE production_approvals SET status=?, reason=?, decided_at=? WHERE id=? AND session_id=? AND status='pending'",
-                ("approved" if approved else "rejected", reason, utc_now(), approval_id, session_id),
+                (target_status, reason, utc_now(), approval_id, session_id),
             ).rowcount
-            if not changed: raise ValueError("pending approval not found")
+            if not changed:
+                current = connection.execute(
+                    "SELECT status FROM production_approvals WHERE id=?", (approval_id,)
+                ).fetchone()
+                if current is None:
+                    raise KeyError(f"approval not found: {approval_id}")
+                if current["status"] != target_status:
+                    raise ValueError(f"approval decision raced with another update; current status is {current['status']}")
             self._event(connection, session_id, "approval_decided", {"approval_id": approval_id, "approved": approved, "reason": reason})
         return self.inspect(session_id)
+
+    def decide_approval_by_id(self, approval_id: str, approved: bool, reason: str) -> dict[str, Any]:
+        with self.store.connect() as connection:
+            approval = connection.execute(
+                "SELECT session_id FROM production_approvals WHERE id=?", (approval_id,)
+            ).fetchone()
+        if approval is None:
+            raise KeyError(f"approval not found: {approval_id}")
+        return self.decide_approval(approval["session_id"], approval_id, approved, reason)
 
     def pause(self, session_id: str, generation_only: bool = False) -> dict[str, Any]:
         with self.store.connect() as connection:
@@ -787,6 +819,8 @@ class ProductionService:
         return self.inspect(session_id)
 
     def cancel(self, session_id: str, request: CancelRequest) -> dict[str, Any]:
+        if self.media is None:
+            raise RuntimeError("cancellation requires a running media service")
         operations = self.store.list_operations(session_id=session_id)
         targets = []
         for operation in operations:

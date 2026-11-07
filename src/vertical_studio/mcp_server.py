@@ -333,13 +333,16 @@ def build_mcp(settings: Settings | None = None) -> tuple[MCPServer, HeadlessMedi
         record = {**operation_spec, "reason": reason, "dependencies": dependencies,
                   "affected_shots": affected_shots, "attempt": attempt, "remaining_budget": remaining_budget}
         with media.store.connect() as connection:
+            if connection.execute("SELECT 1 FROM production_sessions WHERE id=?", (production_session_id,)).fetchone() is None:
+                raise KeyError(f"production session not found: {production_session_id}")
             connection.execute(
                 "INSERT INTO production_approvals VALUES(?,?,?,?,?,?,?,?)",
                 (approval_id, production_session_id, hashlib.sha256(canonical.encode()).hexdigest(),
                  json.dumps(record), "pending", "", utc_now(), None),
             )
             production._event(connection, production_session_id, "approval_requested", {"approval_id": approval_id})
-        return production.inspect(production_session_id)
+        return {**production.inspect(production_session_id), "created_approval_id": approval_id,
+            "created_approval_status": "pending"}
 
     @traced_tool
     def production_list_approvals(production_session_id: Annotated[str, Field(description="Production session ID returned by production_start.")]) -> list[dict[str, Any]]:
@@ -359,6 +362,13 @@ def build_mcp(settings: Settings | None = None) -> tuple[MCPServer, HeadlessMedi
                           reason: Annotated[str, Field(description="Why this proposed operation is rejected.")]) -> dict[str, Any]:
         """Reject a proposal and return the user's reason to the production task graph."""
         return production.decide_approval(production_session_id, approval_id, False, reason)
+
+    @traced_tool
+    def production_resolve_approval(approval_id: Annotated[str, Field(description="Exact approval ID returned by production_request_approval or production_list_approvals.")],
+                                   decision: Annotated[Literal["approved", "rejected"], Field(description="Final decision: approved or rejected.")],
+                                   reason: Annotated[str, Field(description="Reason for the user's decision.")]) -> dict[str, Any]:
+        """Approve or reject one pending approval by ID; resolves its session automatically and safely repeats the same decision."""
+        return production.decide_approval_by_id(approval_id, decision == "approved", reason)
 
     @traced_tool
     def production_set_approval_policy(production_session_id: Annotated[str, Field(description="Production session ID returned by production_start.")],

@@ -186,6 +186,33 @@ the server stderr before retrying. For real-mode failures, also check the
 ComfyUI log and rerun `scripts/real-mode-preflight.sh` and
 `VVS_EXECUTION_MODE=real ./scripts/qualify.sh smoke`.
 
+For approvals, retain the exact `created_approval_id` returned by
+`production_request_approval` and decide it with `production_resolve_approval`
+using `decision="approved"` or `decision="rejected"`. This resolves the owning
+session from the approval ID and safely returns the current state if the same
+decision is repeated. Confirm the returned approval status before continuing.
+If the older `production_approve` or `production_reject` call fails, refresh
+with `production_list_approvals` and retry by approval ID; do not create a
+duplicate request. Wrong-session, missing-ID, and already-decided errors now
+state the specific problem.
+
+If the MCP decision tool itself is unavailable, approve manually from an SSH
+shell using the same installation environment and approval ID:
+
+```bash
+set -a
+source /opt/vertical-media/env
+set +a
+cd /opt/vertical-media/vertical-video-studio
+.venv/bin/vertical-studio approvals PRODUCTION_SESSION_ID
+.venv/bin/vertical-studio approval APPROVAL_ID approved --reason "Approved by user"
+```
+
+Use `rejected` instead of `approved` to reject. The command prints the final
+status and does not start the media worker. Confirm the session ID and exact
+operation with the user before deciding; do not approve based only on a tool
+failure.
+
 ComfyUI is intentionally bound to localhost. From your own computer, use the SSH
 host and port shown by Vast:
 
