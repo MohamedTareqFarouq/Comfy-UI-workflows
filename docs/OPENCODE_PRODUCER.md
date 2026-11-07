@@ -79,6 +79,14 @@ chmod +x setup-ubuntu.sh
 The default is simulation, which is fully usable immediately. Start ComfyUI and OpenCode in
 separate terminals using the commands printed by the installer.
 
+In the VVS app's reference-video path, the project request selects faithful
+recreation or story adaptation; target visual style is handled independently.
+The saved blueprint retains observed source style separately from any requested
+target style, so approval does not replace an explicit visual direction with the
+source look. In the standalone MCP path, carry this intent in the production
+plan and generation prompts; its reference-analysis tool does not return the
+app's structured blueprint fields.
+
 By default the Vast installer downloads all nine Flux Klein and Wan/LightX2V files listed in `config/models.json`. Set `VVS_SKIP_MODELS=1` only for simulation-only installations. Set `HF_TOKEN` when the model host requires authentication.
 
 For a custom mirror, supply a JSON model manifest and the reviewed API exports/node map:

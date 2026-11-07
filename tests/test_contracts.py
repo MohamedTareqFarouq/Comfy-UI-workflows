@@ -182,6 +182,41 @@ def test_reference_blueprint_normalizes_model_continuity_flags() -> None:
     assert all(item.reference_keys == ["player"] for item in storyboard.scenes)
 
 
+def test_reference_blueprint_keeps_source_and_target_styles_separate() -> None:
+    blueprint = ReferenceBlueprint(
+        summary="Adapted reference",
+        story_mode="adapt",
+        transformation_summary="Turn the chase into a rescue story",
+        target_visual_style="ink wash with limited red accents",
+        style={"medium": "live action", "visual_language": "soft natural light"},
+        motion={"animation_style": "handheld natural movement"},
+        canonical_assets=[
+            {"key": "hero", "role": "character", "label": "Hero", "prompt": "A silver-haired hero"},
+        ],
+        scenes=[
+            {
+                "title": f"Scene {index}",
+                "narrative_purpose": "Advance the adapted rescue story",
+                "duration_seconds": 3,
+                "start_composition": "Opening frame",
+                "end_composition": "Closing frame",
+                "motion": "One clear action",
+                "continuity_group": "main",
+                "starts_new_continuity": index == 1,
+            }
+            for index in range(1, 4)
+        ],
+    )
+
+    storyboard = blueprint.as_storyboard()
+
+    assert storyboard.character_bible["reference_story_mode"] == "adapt"
+    assert storyboard.character_bible["reference_transformation_summary"] == "Turn the chase into a rescue story"
+    assert storyboard.character_bible["reference_visual_style"]["medium"] == "live action"
+    assert storyboard.character_bible["target_visual_style"] == "ink wash with limited red accents"
+    assert "ink wash" in storyboard.character_sheet_prompt
+
+
 def test_keyframes_use_at_most_two_edit_references_per_endpoint(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -501,9 +536,9 @@ def test_reference_analysis_has_room_to_finish_inside_16k_context(
     project = Project(
         id="reference-project",
         title="Reference",
-        idea="Reconstruct the reference",
+        idea="Reimagine the reference as a rescue story",
         duration_seconds=10,
-        visual_style="",
+        visual_style="ink wash with limited red accents",
         research_required=False,
         source_mode=SourceMode.REFERENCE,
         state=ProjectState.REFERENCE_ANALYSIS,
@@ -522,13 +557,17 @@ def test_reference_analysis_has_room_to_finish_inside_16k_context(
                 project, "reference.mp4", frames
             )
 
-    ReferenceAnalyzer(Model()).analyze(
+    blueprint, _trace = ReferenceAnalyzer(Model()).analyze(
         project, frames, source_name="reference.mp4"
     )
 
     assert captured["max_tokens"] == 6144
     assert "under 25 words" in captured["system"]
     assert "always close every array and object" in captured["system"]
+    assert "story_mode='adapt'" in captured["system"]
+    assert "Project request: Reimagine the reference as a rescue story" in captured["prompt"]
+    assert blueprint.story_mode == "adapt"
+    assert blueprint.target_visual_style == "ink wash with limited red accents"
 
 def test_image_analysis_recovers_from_malformed_json(
     monkeypatch, tmp_path: Path

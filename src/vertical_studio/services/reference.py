@@ -42,13 +42,24 @@ class ReferenceAnalyzer:
         blueprint = self.model.analyze_images(
             ReferenceBlueprint,
             system=(
-                "Reconstruct a faithful reusable production blueprint from ordered frames "
+                "Analyze the source as evidence, then choose the production path from the user's request. "
+                "Set story_mode='recreate' when the user asks for a faithful remake or gives no story-change direction. "
+                "Set story_mode='adapt' when the user asks to retell, remix, reinterpret, reorder, or change the story. "
+                "For adapt, use the requested new narrative direction rather than copying the source scene order; "
+                "retain only source-supported characters, props, and locations the user wants preserved. "
+                "Write a concise transformation_summary. Keep style analysis separate: style describes the observed "
+                "source, while target_visual_style is empty when preserving it and contains the requested target "
+                "visual treatment when the user asks for a style change. A non-default project visual style is an "
+                "explicit target; do not let an unspecified generic default override the source style. Translate "
+                "named-style shorthand into general visual attributes rather than imitating a named artist or studio. "
+                "Then produce a reusable production blueprint from ordered frames "
                 "sampled across one source video. Identify recurring physical characters as "
                 "separate canonical character assets, each distinct environment as a separate "
                 "environment asset, and important props as prop assets. Infer the rendering "
                 "medium, palette, materials, lighting and animation language from visible "
-                "evidence. Build 3-10 chronological scenes whose durations sum to the requested "
-                "duration. The first scene starts a continuity group. Start a new group for a "
+                "evidence. Keep that source profile in style. Build 3-10 scenes whose durations sum to the requested "
+                "duration. For recreate, preserve chronological source beats. For adapt, make the scenes advance "
+                "the requested changed story while preserving the selected continuity anchors. The first scene starts a continuity group. Start a new group for a "
                 "cut, location change, time jump, or radical composition change. Use only known "
                 "canonical asset keys in scene references. Preserve source evidence rather than "
                 "inventing unsupported details. Frames are numbered in chronological order starting "
@@ -60,8 +71,9 @@ class ReferenceAnalyzer:
             ),
             prompt=(
                 f"Source: {source_name}. Target duration: {project.duration_seconds} seconds. "
-                f"Project request: {project.idea}. Frames are chronological and evenly sampled. "
-                "Describe the overall visual style and motion style, then reconstruct the cast, "
+                f"Project request: {project.idea}. Requested project visual style: {project.visual_style}. "
+                "Frames are chronological and evenly sampled. Decide recreate versus adapt from the request. "
+                "Describe the observed source style and motion, then produce the requested scene plan, cast, "
                 "environments, props, compositions, actions, camera language and continuity."
             ),
             image_urls=[self._data_url(path) for path in frames],
@@ -111,6 +123,18 @@ class ReferenceAnalyzer:
             1,
             len(frames),
         ]))[:2]
+        request = project.idea.lower()
+        adaptation_cues = (
+            "adapt", "reimagine", "re-imagine", "reinterpret", "retell", "remix",
+            "alternate story", "different story", "change the story", "what if",
+        )
+        story_mode = "adapt" if any(cue in request for cue in adaptation_cues) else "recreate"
+        requested_style = project.visual_style.strip()
+        target_visual_style = (
+            requested_style
+            if requested_style and requested_style.lower() != "cinematic 3d cartoon"
+            else ""
+        )
         assets = [
             CanonicalAssetSpec(
                 key="protagonist",
@@ -173,6 +197,11 @@ class ReferenceAnalyzer:
         ]
         return ReferenceBlueprint(
             summary=f"Reference-grounded reconstruction of {source_name}",
+            story_mode=story_mode,
+            transformation_summary=(
+                project.idea if story_mode == "adapt" else ""
+            ),
+            target_visual_style=target_visual_style,
             style=style,
             motion=motion,
             character_bible={

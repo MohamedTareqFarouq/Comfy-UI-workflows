@@ -195,15 +195,18 @@ class Orchestrator:
             f"lighting: {style.lighting}" if style.lighting else "",
             f"materials: {style.materials}" if style.materials else "",
         ]))
+        target_visual_style = blueprint.target_visual_style.strip() or visual_style
         self.db.update_project(
-            project_id, ProjectUpdate(visual_style=visual_style[:500])
+            project_id, ProjectUpdate(visual_style=target_visual_style[:500])
         )
         bible = {
             **storyboard.character_bible,
             "_generation_plan": {
                 "requires_character_sheet": storyboard.requires_character_sheet,
                 "character_sheet_prompt": storyboard.character_sheet_prompt,
-                "visual_style": visual_style[:500],
+                "visual_style": target_visual_style[:500],
+                "reference_story_mode": blueprint.story_mode,
+                "reference_transformation_summary": blueprint.transformation_summary,
                 "reference_analysis_id": analysis["id"],
             },
             "_prompt_audit": {"reference_analysis": analysis["trace"]},

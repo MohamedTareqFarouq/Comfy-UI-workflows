@@ -109,6 +109,7 @@ def test_reference_video_becomes_reviewable_storyboard(
                 "title": "Reference remake",
                 "idea": "Faithfully reconstruct the uploaded reference",
                 "duration_seconds": 10,
+                "visual_style": "woodblock print with restrained red accents",
                 "source_mode": "reference",
             },
         )
@@ -149,6 +150,8 @@ def test_reference_video_becomes_reviewable_storyboard(
             time.sleep(0.05)
         assert detail["project"]["state"] == "reference_review"
         blueprint = detail["reference_analysis"]["blueprint"]
+        assert blueprint["story_mode"] == "recreate"
+        assert blueprint["target_visual_style"] == "woodblock print with restrained red accents"
         assert blueprint["style"]["medium"]
         assert blueprint["motion"]["animation_style"]
         assert len(blueprint["canonical_assets"]) == 2
@@ -171,6 +174,7 @@ def test_reference_video_becomes_reviewable_storyboard(
         detail = client.get(f"/api/projects/{project_id}").json()
         assert detail["project"]["state"] == "storyboard_review"
         assert detail["reference_analysis"]["approved"] is True
+        assert detail["project"]["visual_style"] == "woodblock print with restrained red accents"
         assert detail["canonical_assets"]
         assert detail["scenes"]
 

@@ -177,6 +177,12 @@ class ReferenceMotionProfile(BaseModel):
 
 class ReferenceBlueprint(BaseModel):
     summary: str = Field(min_length=1, max_length=2000)
+    story_mode: Literal["recreate", "adapt"] = Field(
+        default="recreate",
+        description="Whether scenes faithfully recreate source beats or adapt them to the user's requested story changes.",
+    )
+    transformation_summary: str = Field(default="", max_length=1200)
+    target_visual_style: str = Field(default="", max_length=500)
     style: ReferenceStyleProfile
     motion: ReferenceMotionProfile
     character_bible: dict[str, Any] = Field(default_factory=dict)
@@ -379,13 +385,14 @@ class ReferenceBlueprint(BaseModel):
         return self
 
     def as_storyboard(self) -> "Storyboard":
-        style_text = "; ".join(filter(None, [
+        source_style_text = "; ".join(filter(None, [
             self.style.medium,
             self.style.visual_language,
             f"palette: {', '.join(self.style.palette)}" if self.style.palette else "",
             f"lighting: {self.style.lighting}" if self.style.lighting else "",
             f"materials: {self.style.materials}" if self.style.materials else "",
         ]))
+        target_style_text = self.target_visual_style.strip() or source_style_text
         character_assets = [
             asset for asset in self.canonical_assets if asset.role == "character"
         ]
@@ -394,12 +401,15 @@ class ReferenceBlueprint(BaseModel):
             requires_character_sheet=bool(character_assets),
             character_sheet_prompt=(
                 "Create a consistent turnaround sheet for the recurring characters, "
-                f"faithfully preserving the analyzed reference style: {style_text}"
+                f"using the requested target visual style: {target_style_text}"
                 if character_assets else ""
             ),
             character_bible={
                 **self.character_bible,
+                "reference_story_mode": self.story_mode,
+                "reference_transformation_summary": self.transformation_summary,
                 "reference_visual_style": self.style.model_dump(),
+                "target_visual_style": target_style_text,
                 "reference_motion_style": self.motion.model_dump(),
             },
             canonical_assets=self.canonical_assets,
