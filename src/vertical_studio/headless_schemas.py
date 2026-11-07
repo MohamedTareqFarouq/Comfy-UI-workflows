@@ -128,12 +128,12 @@ class ApprovalPolicy(BaseModel):
 
 class ProductionBudgets(BaseModel):
     max_image_operations: int = Field(default=12, ge=0)
-    max_video_operations: int = Field(default=8, ge=0)
+    max_video_operations: int = Field(default=16, ge=0)
     max_candidates_per_operation: int = Field(default=2, ge=1, le=4)
     max_image_retries_per_intent: int = Field(default=2, ge=0)
     max_video_retries_per_intent: int = Field(default=1, ge=0)
     max_consecutive_qa_failures: int = Field(default=2, ge=1)
-    max_generated_video_seconds: float = Field(default=30, gt=0)
+    max_generated_video_seconds: float = Field(default=75, gt=0)
     max_generation_minutes: float = Field(default=120, gt=0)
     max_storage_bytes: int | None = Field(default=None, gt=0)
 

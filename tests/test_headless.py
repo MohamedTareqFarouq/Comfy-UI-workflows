@@ -12,6 +12,7 @@ from vertical_studio.capabilities import RoutingError
 from vertical_studio.config import Settings
 from vertical_studio.headless import HeadlessMediaService, ProductionService
 from vertical_studio.headless_schemas import (
+    ProductionBudgets,
     ProductionTaskRequest,
     ArtifactRef,
     ImageGenerationRequest,
@@ -45,6 +46,12 @@ def wait_for(service: HeadlessMediaService, operation_id: str) -> dict:
             return operation
         service.run_once()
     raise AssertionError("operation did not finish")
+
+
+def test_default_production_budget_covers_sixty_second_video() -> None:
+    budgets = ProductionBudgets()
+    assert budgets.max_video_operations == 16
+    assert budgets.max_generated_video_seconds == 75
 
 
 def test_real_comfy_gpu_ownership_allows_no_qwen_gateway() -> None:
