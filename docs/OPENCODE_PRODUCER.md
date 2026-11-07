@@ -145,6 +145,28 @@ enabled by default; pass `--stateless-http` only when testing stateless clients.
 The OpenCode project configuration uses stdio instead, so its server errors are
 reported by the OpenCode MCP process/logs.
 
+Every MCP call is also written as JSON Lines to
+`$VVS_DATA_DIR/logs/mcp-calls.jsonl`. If `VVS_DATA_DIR` is unset, the default is
+`~/.local/share/vertical-video-studio/logs/mcp-calls.jsonl`. Watch the live trace
+in another terminal with:
+
+```bash
+tail -f "${VVS_DATA_DIR:-$HOME/.local/share/vertical-video-studio}/logs/mcp-calls.jsonl"
+```
+
+Each call has a `trace_id`, tool name, arguments, result identifiers or error,
+and duration. Sensitive-looking argument fields such as tokens and API keys are
+redacted; prompts and local file paths are retained for debugging. The
+`mcp_get_recent_calls` tool returns recent records to the agent. When a call
+fails, its error includes the trace ID; use that ID to find the matching
+`started` and `failed` records. Queued generation errors are recorded on the
+operation, so inspect it with `media_get_operation` and read its `failure` field.
+
+Tool input schemas include field descriptions, allowed enum values, and numeric
+bounds. Argument validation errors happen before a tool runs, but are still
+recorded with a trace ID. The trace query itself is read-only and is not added
+to its own trace.
+
 Smoke-test the registered tools in order: call `media_list_capabilities`, call
 `production_start` with a fresh idempotency key, retain the returned session
 ID, then call `production_get_situation` and `production_inspect` with that ID.

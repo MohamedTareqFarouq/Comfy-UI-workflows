@@ -189,12 +189,61 @@ def test_mcp_exposes_atomic_and_production_control_contract(headless) -> None:
     try:
         names = {tool.name for tool in asyncio.run(server.list_tools())}
         assert {
+            "mcp_get_recent_calls",
             "media_list_capabilities", "media_generate_image", "media_generate_video",
             "media_evaluate", "media_render_sequence", "media_cancel_operation",
             "production_start", "production_update_task", "production_request_approval",
             "production_cancel", "production_emergency_stop", "production_steer",
             "production_get_situation", "production_create_task", "production_invalidate_task",
         } <= names
+    finally:
+        service.stop()
+
+
+def test_mcp_input_schemas_are_described_and_calls_are_traced(headless) -> None:
+    server, service = build_mcp(headless.settings)
+    try:
+        tools = asyncio.run(server.list_tools())
+        tool_schemas = {tool.name: tool.input_schema for tool in tools}
+        for tool in tools:
+            schema = tool.input_schema
+            for name, field in schema.get("properties", {}).items():
+                assert field.get("description"), f"{tool.name}.{name} has no description"
+            for definition_name, definition in schema.get("$defs", {}).items():
+                for name, field in definition.get("properties", {}).items():
+                    assert field.get("description"), f"{tool.name}.{definition_name}.{name} has no description"
+        assert tool_schemas["media_import_reference"]["properties"]["role"]["enum"] == [
+            "identity", "environment", "prop", "style", "composition", "pose",
+            "start_frame", "end_frame", "motion_continuity",
+        ]
+        trace_limit = tool_schemas["mcp_get_recent_calls"]["properties"]["limit"]
+        assert (trace_limit["minimum"], trace_limit["maximum"]) == (1, 100)
+
+        asyncio.run(server.call_tool("media_list_capabilities", {}))
+        with pytest.raises(Exception, match=r"trace_id=[0-9a-f]{32}") as tool_error:
+            asyncio.run(server.call_tool("media_inspect_capability", {"capability_id": "missing-capability"}))
+        assert "unknown capability" in str(tool_error.value)
+        with pytest.raises(Exception, match=r"trace_id=[0-9a-f]{32}") as validation_error:
+            asyncio.run(server.call_tool("media_inspect_capability", {}))
+        assert "capability_id" in str(validation_error.value)
+
+        trace_path = headless.settings.data_dir / "logs" / "mcp-calls.jsonl"
+        records = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+        calls = {}
+        for record in records:
+            calls.setdefault(record["trace_id"], []).append(record)
+        assert any(
+            [record["phase"] for record in entries] == ["started", "completed"]
+            and entries[0]["tool"] == "media_list_capabilities"
+            for entries in calls.values()
+        )
+        assert any(
+            [record["phase"] for record in entries] == ["started", "failed"]
+            and entries[0]["tool"] == "media_inspect_capability"
+            and entries[-1]["error"]
+            for entries in calls.values()
+        )
+        assert sum(record["phase"] == "failed" for record in records) == 2
     finally:
         service.stop()
 
