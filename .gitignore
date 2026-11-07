@@ -1,4 +1,6 @@
 .venv/
+.mcp.json
+/nescafe_30s_recreation.zip
 __pycache__/
 *.py[cod]
 .pytest_cache/

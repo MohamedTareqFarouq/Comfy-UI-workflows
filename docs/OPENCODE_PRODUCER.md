@@ -5,6 +5,65 @@ It chooses whether to analyze, plan, generate, repair, render, or finish and use
 typed `vertical-media-production` MCP tools and has unrestricted shell and filesystem
 access for diagnosis and project work. Start OpenCode from the repository root.
 
+The producer delegates bounded production stages to the subagents in
+`.opencode/agents/`: `runtime-qualifier` checks readiness, `reference-analyst`
+summarizes imported references, `shot-planner` produces the shot/continuity plan,
+`asset-designer` creates image anchors, `video-director` generates Wan clips,
+`qa-reviewer` evaluates artifacts, and `render-finisher` renders an explicitly
+ordered approved sequence. The producer alone owns durable session/task state,
+budgets, user approvals and artifact dispositions, recovery, and final delivery.
+Each specialist has an MCP permission allowlist and is not permitted to change
+those controller-owned decisions.
+
+For reference-video recreation, the usual path is: import the source video into
+managed storage; analyze it and inspect the completed analysis; plan shots and
+continuity; create only necessary image anchors; generate shot clips; evaluate
+the candidates; explicitly approve the selected artifacts; then render their
+approved IDs in the intended order. Skip stages that the request and available
+assets do not need. In real mode, readiness and capability qualification must
+be confirmed before generation; queued work must be polled to a terminal state.
+See [Vast recovery](VAST_RECOVERY.md) for server setup and
+[reference-video recreation](VAST_RECOVERY.md#reference-video-recreation) for
+the browser upload flow.
+## Vast.ai / fresh Ubuntu
+## Archived Nescafe recreation
+
+The inspected [run archive](../nescafe_30s_recreation.zip) contains the source
+screen recording, analysis boards, six extracted keyframes, six generated clips,
+per-shot/final contact sheets, a manifest, logs, and the final render. The source
+was a 65.4-second portrait screen recording with the desired 16:9 ad in its top
+pane. The run sampled the ad at roughly two-second intervals, mapped its beats,
+then used one 1024x576 start frame per shot.
+
+All six successful shots used the real `wan22.i2v.v1` ComfyUI path with Wan 2.2
+14B fp8 high/low-noise models, LightX2V four-step LoRAs, 16 fps, and one
+candidate. Five clips were 81 frames; the ending was 69 frames. The final was
+29.625 seconds, 1024x576, H.264, and silent. Contact sheets sampled every tenth
+frame were reviewed manually because visual QA was unqualified. The basketball
+clip passed weakly: the camera drifted to the hoop/fence and ended on the boy's
+back.
+
+The six independently generated I2V beats made a montage rather than a connected
+chase. Future plans should include causal connective shots, incoming/outgoing
+action states, screen direction and eyelines, and boundary-frame continuity when
+a matching capability is qualified. Do not silently compress connective story
+beats to meet a duration target; surface the tradeoff and budget options.
+
+The run used nine video operations and generated 49.875 seconds against a
+45-second generation budget because of retries. Its GPU generation took about
+26.5 minutes; total wall time was about 55.5 minutes, including a ComfyUI/NVIDIA
+driver mismatch recovery. Budget retries up front and pause for explicit budget
+expansion rather than exceeding the session. The archive reports unloading and
+reloading NVIDIA modules, but the supported recovery guidance in this runbook is
+to restart the full Vast instance for a driver/library mismatch; do not repeat
+that container-level module procedure by default.
+
+The built-in `ffmpeg.sequence_render.v1` renderer outputs portrait 1080x1920 and
+crops landscape clips. The archive correctly used an explicit FFmpeg concat at
+native 16:9 and imported the final artifact. Check renderer constraints against
+the target aspect ratio before rendering. The source audio was extracted but
+not included, so confirm whether audio is part of the requested deliverable.
+
 ## Vast.ai / fresh Ubuntu
 
 Choose a current Ubuntu CUDA image whose NVIDIA runtime works, then:
