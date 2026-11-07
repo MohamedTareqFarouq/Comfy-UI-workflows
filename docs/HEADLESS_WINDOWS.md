@@ -27,7 +27,7 @@ Open PowerShell in a normal user account:
 ```powershell
 git clone YOUR_REPOSITORY_URL vertical-video-studio
 cd vertical-video-studio
-git switch codex/capability-router
+git switch codex/capability-router-vast-ready
 Set-ExecutionPolicy -Scope Process Bypass
 .\packaging\windows\setup-headless.ps1
 .\packaging\windows\start-media-mcp.ps1
@@ -67,7 +67,7 @@ sudo apt update
 sudo apt install -y git python3 python3-venv ffmpeg
 git clone YOUR_REPOSITORY_URL vertical-video-studio
 cd vertical-video-studio
-git switch codex/capability-router
+git switch codex/capability-router-vast-ready
 ./scripts/setup.sh
 VVS_EXECUTION_MODE=simulation .venv/bin/vertical-studio-mcp \
   --transport streamable-http --host 127.0.0.1 --port 8766

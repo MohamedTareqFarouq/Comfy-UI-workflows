@@ -11,7 +11,7 @@ fi
 
 ROOT="${VVS_INSTALL_ROOT:-/opt/vertical-media}"
 REPO_URL="${VVS_REPO_URL:-}"
-BRANCH="${VVS_BRANCH:-codex/capability-router}"
+BRANCH="${VVS_BRANCH:-codex/capability-router-vast-ready}"
 COMFY_DIR="${VVS_COMFY_DIR:-$ROOT/ComfyUI}"
 APP_DIR="${VVS_APP_DIR:-$ROOT/vertical-video-studio}"
 DATA_DIR="${VVS_DATA_DIR:-$ROOT/data}"

@@ -10,7 +10,7 @@ Python 3.10, so it requires the Python 3.11 workaround below.
 ssh -p VAST_PORT root@VAST_IP
 
 cd /tmp
-git clone -b codex/capability-router YOUR_REPOSITORY_URL vertical-bootstrap
+git clone -b codex/capability-router-vast-ready YOUR_REPOSITORY_URL vertical-bootstrap
 cd vertical-bootstrap
 ```
 
@@ -67,7 +67,7 @@ its own separate Python 3.10 environment.
 ```bash
 export VVS_APP_DIR=/tmp/vertical-bootstrap
 export VVS_INSTALL_ROOT=/opt/vertical-media
-export VVS_BRANCH=codex/capability-router
+export VVS_BRANCH=codex/capability-router-vast-ready
 export VVS_PYTHON=python3.11
 export PYTHON_BIN=python3.11
 

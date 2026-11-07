@@ -11,7 +11,7 @@ Choose a current Ubuntu CUDA image whose NVIDIA runtime works, then:
 
 ```bash
 export VVS_REPO_URL="YOUR_GIT_URL"
-export VVS_BRANCH="codex/capability-router"
+export VVS_BRANCH="codex/capability-router-vast-ready"
 curl -O YOUR_RAW_REPOSITORY_URL/packaging/vastai/setup-ubuntu.sh
 chmod +x setup-ubuntu.sh
 ./setup-ubuntu.sh
@@ -88,7 +88,7 @@ GPU such as an RTX A6000 or L40 is preferable for Wan 14B if the price is accept
 
    ```bash
    export VVS_REPO_URL="https://YOUR_GIT_HOST/YOUR_ACCOUNT/YOUR_REPOSITORY.git"
-   export VVS_BRANCH="codex/capability-router"
+  export VVS_BRANCH="codex/capability-router-vast-ready"
    export VVS_INSTALL_ROOT="/opt/vertical-media"
    export VVS_EXECUTION_MODE="simulation"
    ```
