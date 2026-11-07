@@ -155,6 +155,42 @@ def build_mcp(settings: Settings | None = None) -> tuple[MCPServer, HeadlessMedi
         return tracer.recent(limit)
 
     @traced_tool
+    def mcp_get_status() -> dict[str, Any]:
+        """Report this MCP process's execution mode, backend, ComfyUI reachability, and capability qualification.
+
+        Call before any image or video generation. Simulation uses a local mock and never contacts ComfyUI.
+        """
+        simulation = settings.is_simulation
+        comfy = (
+            {"available": False, "checked": False, "reason": "Simulation uses a local mock backend."}
+            if simulation else {**media.generator.health(), "checked": True}
+        )
+        capabilities = [
+            {
+                "id": item.id,
+                "media_type": item.media_type.value,
+                "qualification_state": item.qualification_state.value,
+            }
+            for item in media.registry.list()
+        ]
+        real_ready = not simulation and bool(comfy.get("available"))
+        return {
+            "execution_mode": settings.execution_mode,
+            "backend": "mock_simulator" if simulation else "comfyui",
+            "comfyui": comfy,
+            "capabilities": capabilities,
+            "real_generation_ready_capabilities": [
+                item["id"] for item in capabilities
+                if real_ready and item["qualification_state"] == "qualified"
+                and item["media_type"] in {"image", "video"}
+            ],
+            "simulation_warning": (
+                "Generated files are local simulation placeholders, not ComfyUI results."
+                if simulation else None
+            ),
+        }
+
+    @traced_tool
     def media_list_capabilities() -> list[dict[str, Any]]:
         """List every capability, including disabled, missing, and unqualified entries."""
         return [item.model_dump(mode="json") for item in media.registry.list()]
@@ -182,12 +218,14 @@ def build_mcp(settings: Settings | None = None) -> tuple[MCPServer, HeadlessMedi
     @traced_tool
     def media_generate_image(request: Annotated[ImageGenerationRequest, Field(description="Image prompt, dimensions, references, seed, candidate count, and idempotency key.")]) -> dict[str, Any]:
         """Queue routed T2I, single-reference, or one-through-four-reference image generation."""
-        return media.generate_image(request)
+        return {**media.generate_image(request), "execution_mode": settings.execution_mode,
+            "backend": "mock_simulator" if settings.is_simulation else "comfyui"}
 
     @traced_tool
     def media_generate_video(request: Annotated[VideoGenerationRequest, Field(description="Video prompt, start/end frame references, motion, dimensions, frame count, seed, and idempotency key.")]) -> dict[str, Any]:
         """Queue Wan I2V or FLF2V; roles determine the mode and are never discarded."""
-        return media.generate_video(request)
+        return {**media.generate_video(request), "execution_mode": settings.execution_mode,
+            "backend": "mock_simulator" if settings.is_simulation else "comfyui"}
 
     @traced_tool
     def media_evaluate(request: Annotated[EvaluationRequest, Field(description="Artifact IDs and optional technical requirements to evaluate.")]) -> dict[str, Any]:
@@ -202,7 +240,8 @@ def build_mcp(settings: Settings | None = None) -> tuple[MCPServer, HeadlessMedi
     @traced_tool
     def media_get_operation(operation_id: Annotated[str, Field(description="Operation ID returned by a queueing tool. Poll until state is succeeded, failed, or cancelled.")]) -> dict[str, Any]:
         """Inspect one asynchronous operation."""
-        return media.store.operation(operation_id)
+        return {**media.store.operation(operation_id), "execution_mode": settings.execution_mode,
+            "backend": "mock_simulator" if settings.is_simulation else "comfyui"}
 
     @traced_tool
     def media_list_operations(production_session_id: Annotated[str | None, Field(description="Optional production session ID to filter by.")] = None,

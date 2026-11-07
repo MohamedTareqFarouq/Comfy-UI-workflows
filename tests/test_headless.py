@@ -190,12 +190,46 @@ def test_mcp_exposes_atomic_and_production_control_contract(headless) -> None:
         names = {tool.name for tool in asyncio.run(server.list_tools())}
         assert {
             "mcp_get_recent_calls",
+            "mcp_get_status",
             "media_list_capabilities", "media_generate_image", "media_generate_video",
             "media_evaluate", "media_render_sequence", "media_cancel_operation",
             "production_start", "production_update_task", "production_request_approval",
             "production_cancel", "production_emergency_stop", "production_steer",
             "production_get_situation", "production_create_task", "production_invalidate_task",
         } <= names
+    finally:
+        service.stop()
+
+
+def test_mcp_marks_simulated_generation_in_status_operation_and_artifact(headless) -> None:
+    server, service = build_mcp(headless.settings)
+    try:
+        status_result = asyncio.run(server.call_tool("mcp_get_status", {}))
+        status = status_result.model_dump(mode="json", by_alias=True)["structuredContent"]
+        assert status["execution_mode"] == "simulation"
+        assert status["backend"] == "mock_simulator"
+        assert status["comfyui"]["checked"] is False
+        assert "not ComfyUI results" in status["simulation_warning"]
+
+        queued_result = asyncio.run(server.call_tool("media_generate_image", {
+            "request": {
+                "prompt": "test image", "idempotency_key": "simulation-provenance-001",
+                "width": 256, "height": 256,
+            },
+        }))
+        queued = queued_result.model_dump(mode="json", by_alias=True)["structuredContent"]
+        assert queued["state"] == "queued"
+        assert queued["execution_mode"] == "simulation"
+        assert queued["backend"] == "mock_simulator"
+
+        assert service.run_once()
+        operation = service.store.operation(queued["id"])
+        assert operation["state"] == "succeeded"
+        artifact = service.store.artifact(operation["result_artifact_ids"][0])
+        assert artifact["metadata"]["backend"] == "mock_simulator"
+        assert artifact["metadata"]["execution_mode"] == "simulation"
+        assert artifact["metadata"]["simulated"] is True
+        assert "prompt_id" not in artifact["metadata"]
     finally:
         service.stop()
 

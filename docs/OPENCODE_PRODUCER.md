@@ -167,6 +167,14 @@ bounds. Argument validation errors happen before a tool runs, but are still
 recorded with a trace ID. The trace query itself is read-only and is not added
 to its own trace.
 
+Before generation, call `mcp_get_status`. It reports the MCP process's actual
+`execution_mode`, selected backend, ComfyUI reachability, and qualified
+capabilities. In simulation, generation uses a local mock and never contacts
+ComfyUI; queued operations and artifacts are marked `backend=mock_simulator`
+and `simulated=true`. Real ComfyUI artifacts are marked `backend=comfyui` and
+include the ComfyUI `prompt_id`. Do not describe a result as a ComfyUI
+generation unless the artifact metadata confirms that provenance.
+
 Smoke-test the registered tools in order: call `media_list_capabilities`, call
 `production_start` with a fresh idempotency key, retain the returned session
 ID, then call `production_get_situation` and `production_inspect` with that ID.

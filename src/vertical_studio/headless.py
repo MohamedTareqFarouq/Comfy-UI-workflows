@@ -277,7 +277,13 @@ class HeadlessMediaService:
             with self.gpu.comfy(reset_models=False):
                 result = self.generator.generate_capability_image(target / str(candidate), payload)
             for path in result.files:
-                created.append(self._record_generated(operation, path, result.metadata, "generated"))
+                created.append(self._record_generated(
+                    operation, path,
+                    {**result.metadata, "execution_mode": self.settings.execution_mode,
+                     "backend": "mock_simulator" if self.settings.is_simulation else "comfyui",
+                     "simulated": self.settings.is_simulation},
+                    "generated",
+                ))
         return created
 
     def _execute_video(self, operation: dict[str, Any], target: Path) -> list[str]:
@@ -300,7 +306,13 @@ class HeadlessMediaService:
             with self.gpu.comfy(reset_models=False):
                 result = self.generator.generate_capability_video(target / str(candidate), payload)
             for path in result.files:
-                created.append(self._record_generated(operation, path, result.metadata, "generated"))
+                created.append(self._record_generated(
+                    operation, path,
+                    {**result.metadata, "execution_mode": self.settings.execution_mode,
+                     "backend": "mock_simulator" if self.settings.is_simulation else "comfyui",
+                     "simulated": self.settings.is_simulation},
+                    "generated",
+                ))
         return created
 
     def _execute_analysis(self, operation: dict[str, Any], target: Path) -> list[str]:
