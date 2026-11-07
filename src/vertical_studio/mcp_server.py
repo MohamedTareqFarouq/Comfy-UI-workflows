@@ -241,6 +241,10 @@ def main() -> None:
     parser.add_argument("--transport", choices=["stdio", "streamable-http"], default="streamable-http")
     parser.add_argument("--host", default=os.getenv("VVS_MCP_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("VVS_MCP_PORT", "8766")))
+    parser.add_argument(
+        "--stateless-http", action="store_true",
+        help="Disable MCP HTTP transport sessions (production sessions remain persisted)",
+    )
     args = parser.parse_args()
     server, media = build_mcp()
     media.start()
@@ -249,7 +253,7 @@ def main() -> None:
             server.run(transport="stdio")
         else:
             server.run(transport="streamable-http", host=args.host, port=args.port,
-                       stateless_http=True, json_response=True)
+                       stateless_http=args.stateless_http, json_response=True)
     finally:
         media.stop()
 

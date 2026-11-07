@@ -1,8 +1,9 @@
 # OpenCode producer and Vast.ai bootstrap
 
 The project includes a primary OpenCode agent at `.opencode/agents/vertical-producer.md`.
-It chooses whether to analyze, plan, generate, repair, render, or finish and uses only the
-typed `vertical-media-production` MCP tools. Start OpenCode from the repository root.
+It chooses whether to analyze, plan, generate, repair, render, or finish and uses the
+typed `vertical-media-production` MCP tools and has unrestricted shell and filesystem
+access for diagnosis and project work. Start OpenCode from the repository root.
 
 ## Vast.ai / fresh Ubuntu
 
@@ -125,6 +126,35 @@ On the Vast instance, use two terminal sessions or a `tmux` session:
 
 The configured OpenCode agent starts the media MCP backend automatically over
 stdio. No separate MCP-server terminal is required.
+
+## Debug the MCP server
+
+Start an isolated simulation server in a separate terminal so its stderr stays
+visible and debug data does not mix with production data:
+
+```bash
+VVS_EXECUTION_MODE=simulation \
+VVS_DATA_DIR="$PWD/data-mcp-debug" \
+"$PWD/.venv/bin/python" -m vertical_studio.mcp_server --transport streamable-http \
+  --host 127.0.0.1 --port 8766
+```
+
+Connect an MCP Inspector to `http://127.0.0.1:8766/mcp`, or configure a
+temporary OpenCode HTTP MCP entry pointing there. HTTP transport sessions are
+enabled by default; pass `--stateless-http` only when testing stateless clients.
+The OpenCode project configuration uses stdio instead, so its server errors are
+reported by the OpenCode MCP process/logs.
+
+Smoke-test the registered tools in order: call `media_list_capabilities`, call
+`production_start` with a fresh idempotency key, retain the returned session
+ID, then call `production_get_situation` and `production_inspect` with that ID.
+For generation, pass the same value as `production_session_id` and poll the
+returned operation with `media_get_operation`. This distinguishes MCP transport
+initialization/session errors from application errors in a production
+operation. Record the exact tool name, arguments, error text, operation ID, and
+the server stderr before retrying. For real-mode failures, also check the
+ComfyUI log and rerun `scripts/real-mode-preflight.sh` and
+`VVS_EXECUTION_MODE=real ./scripts/qualify.sh smoke`.
 
 ComfyUI is intentionally bound to localhost. From your own computer, use the SSH
 host and port shown by Vast:
