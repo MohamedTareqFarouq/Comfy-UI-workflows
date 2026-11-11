@@ -350,6 +350,46 @@ class ComfyClient:
             metadata={**result.metadata, "prompt": prompt, "references": audit_references},
         )
 
+    def _generate_qwen_image21(
+        self, output_dir: Path, payload: dict[str, Any], *, prompt: str,
+        seed: int, references: list[dict[str, Any]], output_prefix: str,
+    ) -> GenerationResult:
+        if not 1 <= len(references) <= 3:
+            raise GenerationError(
+                "reference_count_invalid", "Qwen Image 2.1 accepts 1-3 reference images"
+            )
+        template = "qwen_image21_edit_api"
+        required = {"prompt", "negative_prompt", "seed", "resolution", "output_prefix"}
+        required.update(f"reference_{index}" for index in range(1, len(references) + 1))
+        mapping = self._load_mapping(template, required)
+        values: dict[str, Any] = {
+            "prompt": prompt,
+            "negative_prompt": payload.get("negative_prompt", ""),
+            "seed": seed,
+            "resolution": 1024,
+            "output_prefix": output_prefix,
+        }
+        audit_references = []
+        for index, reference in enumerate(references, 1):
+            path = Path(reference["path"])
+            values[f"reference_{index}"] = self._upload_image(path)
+            audit_references.append({
+                key: reference.get(key)
+                for key in ("artifact_id", "role", "path", "label", "key")
+            })
+        result = self._run(
+            template, {**payload, "patches": self._mapped_patches(mapping, values)}, output_dir
+        )
+        return GenerationResult(
+            files=result.files,
+            metadata={
+                **result.metadata,
+                "prompt": prompt,
+                "references": audit_references,
+                "encoder_resolution": 1024,
+            },
+        )
+
     @staticmethod
     def _reference_directive(references: list[dict[str, Any]]) -> str:
         assignments = []
@@ -734,6 +774,10 @@ class ComfyClient:
         )
         if capability_id == "flux_klein.t2i.v1":
             return self._generate_t2i_image(output_dir, payload, **common)
+        if capability_id == "qwen_image21.multi_reference.v1":
+            return self._generate_qwen_image21(
+                output_dir, payload, references=references, **common
+            )
         if capability_id not in {
             "flux_klein.single_reference.v1", "flux_klein.multi_reference.v1"
         }:

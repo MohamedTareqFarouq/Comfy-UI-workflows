@@ -323,14 +323,14 @@ The original repository workflows are ComfyUI UI graphs. Real mode deliberately 
 
 1. Keep simulation mode enabled during installation.
 2. Install and pin ComfyUI and required custom nodes.
-3. Place Flux, Wan and LightX2V LoRA files in their required ComfyUI directories.
+3. Place Flux, Wan and LightX2V LoRA files in their required ComfyUI directories. The optional Qwen Image 2.1 edit capability can be installed with `./scripts/install-model-manifest.sh config/models.json "$COMFY_DIR" qwen-image`.
 4. Export the tested graphs through **File > Export (API)**.
 5. Save the templates using the names in [workflows/README.md](workflows/README.md).
 6. Copy `workflow_maps.example.json` to the ignored `workflow_maps.json` and enter exact node IDs.
 7. Copy `qualification_payloads.example.json` to the ignored `qualification_payloads.json`.
 8. Populate and verify hashes in [config/models.json](config/models.json).
 9. Start ComfyUI on the configured local endpoint. Managed mode starts Qwen on the GPU only when planning needs it.
-10. Run qualification explicitly.
+10. Run qualification explicitly. Qwen Image 2.1 is included as a separate capability and does not change Klein routing or production keyframes.
 
 ```bash
 ./scripts/qualify.sh diagnostics

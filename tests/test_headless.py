@@ -205,8 +205,31 @@ def test_capability_router_is_deterministic_and_rejects_control_loss(headless) -
     reference = ArtifactRef(artifact_id="a", role=ReferenceRole.IDENTITY)
     assert headless.registry.route_image([reference]).id == "flux_klein.single_reference.v1"
     assert headless.registry.route_image([reference, reference]).id == "flux_klein.multi_reference.v1"
+    assert headless.registry.route_image(
+        [reference, reference, reference], "qwen_image21.multi_reference.v1"
+    ).id == "qwen_image21.multi_reference.v1"
     with pytest.raises(RoutingError, match="conflicts"):
         headless.registry.route_image([reference], "flux_klein.t2i.v1")
+    with pytest.raises(RoutingError, match="conflicts"):
+        headless.registry.route_image(
+            [reference, reference, reference, reference],
+            "qwen_image21.multi_reference.v1",
+        )
+
+
+def test_qwen_image21_rejects_multiple_candidates(headless, tmp_path: Path) -> None:
+    image = tmp_path / "qwen-primary.png"
+    run_ffmpeg(["-f", "lavfi", "-i", "color=c=blue:s=270x480:d=0.1", "-frames:v", "1", str(image)])
+    reference = headless.import_reference(str(image), "identity", "qwen-candidate-reference-1")
+    request = ImageGenerationRequest(
+        prompt="Edit the primary image",
+        references=[ArtifactRef(artifact_id=reference["id"], role=ReferenceRole.IDENTITY)],
+        candidate_count=2,
+        preferred_capability="qwen_image21.multi_reference.v1",
+        idempotency_key="qwen-image-candidates-1",
+    )
+    with pytest.raises(RoutingError, match="at most 1 candidate"):
+        headless.generate_image(request)
 
 
 def test_real_registry_uses_persisted_per_capability_qualification(tmp_path: Path) -> None:

@@ -61,6 +61,24 @@ def _capabilities() -> list[Capability]:
             **common_image,
         ),
         Capability(
+            id="qwen_image21.multi_reference.v1", version="1.0.0", media_type=MediaType.IMAGE,
+            mode="multi_reference_edit", required_inputs=["prompt", "references"],
+            optional_inputs=["negative_prompt", "seed"], min_references=1, max_references=3,
+            reference_roles=image_roles, model_family="Qwen Image 2.1",
+            model_files=[
+                "qwen_image_2.1_int8_convrot.safetensors",
+                "qwen3vl_8b_bf16.safetensors",
+                "qwen_image_2.1_vae_bf16.safetensors",
+            ], workflow_template="qwen_image21_edit_api.json",
+            node_map="qwen_image21_edit_api",
+            constraints={"max_references": 3, "max_candidates": 1, "encoder_resolution": 1024},
+            vram_profile="24gb", resource_class="gpu_image", execution_time_class="long",
+            limitations=[
+                "The first reference is the primary edit image; up to two additional images are conditioning references.",
+                "The supplied graph uses Qwen's 1024 encoder resolution and emits one image per run; requested width and height are not directly applied.",
+            ],
+        ),
+        Capability(
             id="wan22.i2v.v1", version="1.0.0", media_type=MediaType.VIDEO,
             mode="image_to_video", required_inputs=["prompt", "start_frame"],
             optional_inputs=["negative_prompt", "motion_description", "camera_description", "seed"],

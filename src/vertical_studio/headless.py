@@ -570,6 +570,12 @@ class HeadlessMediaService:
 
     def generate_image(self, request: ImageGenerationRequest) -> dict[str, Any]:
         capability = self.registry.route_image(request.references, request.preferred_capability)
+        max_candidates = int(capability.constraints.get("max_candidates", request.candidate_count))
+        if request.candidate_count > max_candidates:
+            raise RoutingError(
+                "candidate_count_invalid",
+                f"{capability.id} supports at most {max_candidates} candidate per operation",
+            )
         payload = request.model_dump(mode="json")
         return self._submit(capability.id, payload, [x.artifact_id for x in request.references],
                             [x.role for x in request.references], request.idempotency_key, request.production_session_id)

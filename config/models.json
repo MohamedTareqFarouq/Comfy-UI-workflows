@@ -70,6 +70,27 @@
       "file": "wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
       "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
       "sha256": null
+    },
+    {
+      "group": "qwen-image",
+      "directory": "diffusion_models",
+      "file": "qwen_image_2.1_int8_convrot.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/diffusion_models/qwen_image_2.1_int8_convrot.safetensors",
+      "sha256": null
+    },
+    {
+      "group": "qwen-image",
+      "directory": "text_encoders",
+      "file": "qwen3vl_8b_bf16.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_bf16.safetensors",
+      "sha256": null
+    },
+    {
+      "group": "qwen-image",
+      "directory": "vae",
+      "file": "qwen_image_2.1_vae_bf16.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors",
+      "sha256": null
     }
   ],
   "note": "URLs and filenames are derived from the committed ComfyUI workflow templates. Populate SHA-256 values from the final qualified installation."

@@ -289,5 +289,15 @@
       "node_id": "13",
       "input": "image"
     }
+  },
+  "qwen_image21_edit_api": {
+    "prompt": {"node_id": "459:474", "input": "prompt"},
+    "negative_prompt": {"node_id": "459:474", "input": "negative_prompt"},
+    "resolution": {"node_id": "459:474", "input": "resolution"},
+    "seed": {"node_id": "459:458", "input": "seed"},
+    "output_prefix": {"node_id": "461", "input": "filename_prefix"},
+    "reference_1": {"node_id": "470", "input": "image"},
+    "reference_2": {"node_id": "476", "input": "image"},
+    "reference_3": {"node_id": "477", "input": "image"}
   }
 }

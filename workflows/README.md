@@ -5,6 +5,7 @@ Files in the repository root are the original ComfyUI UI graphs and remain uncha
 - `flux_t2i_api.json`
 - `image_flux2_klein_image_edit_4b_distilled_api.json` (one reference)
 - `flux_edit_api.json` (two references)
+- `qwen_image21_edit_api.json` (one to three references; optional alternative to Klein)
 - `wan14b_lightx2v_flf2v_api.json`
 - Optional explicit fallback: `wan5b_flf2v_api.json`
 
@@ -58,3 +59,23 @@ character is preferred; for a location transition the destination environment is
 The project `visual_style` is injected into character-sheet, T2I, Flux Edit and Wan
 prompts. Stylized projects also add photorealism/live-action terms to negative prompts.
 The application uploads and patches every reference deterministically.
+
+## Optional Qwen Image 2.1 edit capability
+
+`qwen_image21.multi_reference.v1` is available through the registered image capability
+router alongside the default Klein capabilities. Select it with `preferred_capability`
+in `media_generate_image`; it accepts one primary reference and up to two additional
+conditioning images. The first supplied reference maps to `images.image_1`. It uses the
+workflow's fixed 1024 encoder resolution, follows the primary reference's aspect ratio,
+and emits one image per operation. It is not yet a replacement for the production
+keyframe path, which continues to use Klein until explicitly qualified and exposed as a
+production setting.
+
+Install the Qwen Image 2.1 ComfyUI model files with:
+
+```bash
+./scripts/install-model-manifest.sh config/models.json "$COMFY_DIR" qwen-image
+```
+
+The capability remains unqualified for real execution until a confirmed target-machine
+qualification run succeeds. The model set is sized conservatively for a 24 GB GPU.

@@ -131,6 +131,7 @@ class QualificationService:
                 "flux_t2i_api.json",
                 "flux_klein_multiref_1_api.json",
                 "flux_klein_multiref_2_api.json",
+                "qwen_image21_edit_api.json",
                 "wan22_i2v_api.json",
                 "wan14b_lightx2v_flf2v_api.json",
                 "workflow_maps.json",
@@ -184,6 +185,17 @@ class QualificationService:
                 if run["qualified"]:
                     qualified.append(single_id)
 
+                qwen_id = "qwen_image21.multi_reference.v1"
+                qwen_run, _ = self._run_registered(
+                    generator, qwen_id,
+                    {**common, "operation_id": f"qualification-{qwen_id}",
+                     "capability_id": qwen_id, "resolved_references": [reference_item]},
+                    run_dir / qwen_id, video=False,
+                )
+                report["runs"].append(qwen_run)
+                if qwen_run["qualified"]:
+                    qualified.append(qwen_id)
+
                 multi_id = "flux_klein.multi_reference.v1"
                 multi_passed = True
                 roles = ("identity", "style", "environment", "prop")
@@ -231,6 +243,7 @@ class QualificationService:
         expected = {
             "flux_klein.t2i.v1", "flux_klein.single_reference.v1",
             "flux_klein.multi_reference.v1", "wan22.i2v.v1", "wan22.flf2v.v1",
+            "qwen_image21.multi_reference.v1",
         }
         report["qualified_capabilities"] = sorted(qualified)
         report["qualified"] = expected <= set(qualified)

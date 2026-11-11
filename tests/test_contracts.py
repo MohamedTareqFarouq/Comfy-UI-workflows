@@ -93,6 +93,63 @@ def test_registered_t2i_and_wan_workflow_mappings_target_real_nodes() -> None:
             assert all(str(pointer["node_id"]) in graph for pointer in pointers)
 
 
+def test_qwen_image21_workflow_and_mapping_cover_edit_inputs() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow_dir = root / "workflows"
+    graph = json.loads((workflow_dir / "qwen_image21_edit_api.json").read_text())
+    mappings = json.loads((workflow_dir / "workflow_maps.json").read_text())
+    mapping = mappings["qwen_image21_edit_api"]
+    assert {"prompt", "negative_prompt", "resolution", "seed", "output_prefix",
+            "reference_1", "reference_2", "reference_3"} <= set(mapping)
+    for pointers in mapping.values():
+        pointers = pointers if isinstance(pointers, list) else [pointers]
+        for pointer in pointers:
+            node_id = str(pointer["node_id"])
+            assert node_id in graph
+            assert pointer["input"] in graph[node_id]["inputs"]
+
+
+def test_qwen_image21_capability_patches_uploaded_references(monkeypatch, tmp_path: Path) -> None:
+    client = ComfyClient("http://127.0.0.1:8188", Path(__file__).resolve().parents[1] / "workflows")
+    paths = [tmp_path / "primary.png", tmp_path / "identity.png"]
+    uploaded: list[Path] = []
+    captured: dict = {}
+
+    def fake_upload(path: Path) -> str:
+        uploaded.append(path)
+        return f"input/{path.name}"
+
+    def fake_run(template: str, payload: dict, output_dir: Path) -> GenerationResult:
+        captured.update(template=template, payload=payload)
+        return GenerationResult(files=[], metadata={})
+
+    monkeypatch.setattr(client, "_upload_image", fake_upload)
+    monkeypatch.setattr(client, "_run", fake_run)
+    client.generate_capability_image(tmp_path / "out", {
+        "capability_id": "qwen_image21.multi_reference.v1",
+        "operation_id": "qwen-test",
+        "prompt": "Keep the person; change the jacket",
+        "negative_prompt": "blur",
+        "seed": 17,
+        "resolved_references": [
+            {"path": str(paths[0]), "artifact_id": "primary", "role": "identity"},
+            {"path": str(paths[1]), "artifact_id": "identity-ref", "role": "style"},
+        ],
+    })
+
+    assert uploaded == paths
+    assert captured["template"] == "qwen_image21_edit_api"
+    patches = {
+        (patch["node_id"], patch["input"]): patch["value"]
+        for patch in captured["payload"]["patches"]
+    }
+    assert patches[("459:474", "prompt")] == "Keep the person; change the jacket"
+    assert patches[("459:474", "negative_prompt")] == "blur"
+    assert patches[("459:458", "seed")] == 17
+    assert patches[("470", "image")] == "input/primary.png"
+    assert patches[("476", "image")] == "input/identity.png"
+
+
 def test_storyboard_enforces_endpoint_environment_continuity() -> None:
     assets = [
         {"key": "leo", "role": "character", "label": "Leo", "prompt": "Leo alone"},
@@ -900,7 +957,7 @@ def test_model_manifest_covers_every_workflow_model() -> None:
                 if isinstance(value, str):
                     referenced.add((directory, value))
     assert referenced <= declared
-    assert len(manifest["comfy_models"]) == 9
+    assert len(manifest["comfy_models"]) == 12
     assert all(item["url"].startswith("https://huggingface.co/") for item in manifest["comfy_models"])
 
 
