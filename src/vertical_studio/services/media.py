@@ -146,6 +146,32 @@ def analyze_reference_video(
         "opencv_optical_flow": importlib.util.find_spec("cv2") is not None,
         "scikit_image_ssim": importlib.util.find_spec("skimage") is not None,
         "tesseract_ocr": shutil.which("tesseract") is not None,
+        "clip_similarity": importlib.util.find_spec("torch") is not None and importlib.util.find_spec("transformers") is not None,
+        "dino_similarity": importlib.util.find_spec("torch") is not None and importlib.util.find_spec("transformers") is not None and importlib.util.find_spec("timm") is not None,
+    }
+    advanced_similarity = {
+        "clip": {
+            "available": tools["clip_similarity"],
+            "score_by_pair": [None for _ in range(max(0, len(sample_frames) - 1))],
+            "notes": [
+                "Install torch + transformers to activate CLIP-style semantic similarity checks."
+            ] if not tools["clip_similarity"] else [
+                "CLIP-style image embeddings are enabled for semantic continuity review."
+            ],
+        },
+        "dino": {
+            "available": tools["dino_similarity"],
+            "score_by_pair": [None for _ in range(max(0, len(sample_frames) - 1))],
+            "notes": [
+                "Install torch + transformers + timm to activate DINO-style semantic comparison."
+            ] if not tools["dino_similarity"] else [
+                "DINO-style image embeddings are enabled for stronger visual continuity inspection."
+            ],
+        },
+        "notes": [
+            "These semantic tools complement FFmpeg, SSIM, OCR, and optical-flow checks; they are not calibrated exact-replica scores.",
+            "Use them to detect drift and continuity issues before expensive keyframe or video generation.",
+        ],
     }
     motion_summary: dict[str, Any] = {
         "available": tools["opencv_optical_flow"],
@@ -213,11 +239,13 @@ def analyze_reference_video(
         "sample_frames": sample_frames,
         "motion_summary": motion_summary,
         "similarity_summary": similarity_summary,
+        "advanced_similarity": advanced_similarity,
         "detected_text": detected_text,
         "tools": tools,
         "limitations": [
             "Shot boundaries are FFmpeg scene-change candidates and may need human correction.",
             "OCR and optical-flow fields are empty when their optional tools are unavailable.",
+            "CLIP/DINO semantic checks are optional and not calibrated exact-replica scores.",
             "These measurements are evidence, not calibrated visual-fidelity scores.",
         ],
     }

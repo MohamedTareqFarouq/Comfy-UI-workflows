@@ -80,7 +80,11 @@ class QualityService:
                 advisory_pass = False
         except ModelUnavailable as exc:
             advisory_pass = False
-            reasons.append(f"visual review unavailable: {exc}")
+            evaluator = "manual_review_required"
+            reasons.append(
+                f"visual review unavailable: {exc}; choose between available options "
+                "(technical-only pass, human contact-sheet review, or retry when Qwen is available)."
+            )
         except (MediaError, StopIteration, ValueError, TypeError) as exc:
             reasons.append(str(exc))
         technical = all(scores.get(name, 0.0) >= 1.0 for name in ("portrait", "decodable", "duration"))
