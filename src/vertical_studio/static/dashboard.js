@@ -2,6 +2,7 @@ const state = {
   projects: [],
   details: {},
   poll: null,
+  runtime: null,
 };
 
 const q = (selector) => document.querySelector(selector);
@@ -22,6 +23,8 @@ async function api(path, options = {}) {
 
 function statusTone(status) {
   if (['running', 'queued', 'working', 'ready'].includes(status)) return 'working';
+  if (status === 'unqualified') return 'working';
+  if (status === 'unavailable') return 'error';
   if (['waiting', 'pending', 'review'].includes(status)) return 'waiting';
   if (['approved', 'complete', 'finished', 'succeeded'].includes(status)) return 'ok';
   if (['rejected', 'failed', 'error'].includes(status)) return 'error';
@@ -65,8 +68,12 @@ async function loadProjectDetail(projectId) {
 }
 
 async function refreshDashboard() {
-  const projects = await api('/api/projects');
+  const [projects, runtime] = await Promise.all([
+    api('/api/projects'),
+    api('/api/status').catch(() => null),
+  ]);
   state.projects = projects;
+  state.runtime = runtime;
 
   await Promise.all(
     projects.map(async (project) => {
@@ -77,8 +84,50 @@ async function refreshDashboard() {
   );
 
   renderOverview();
+  renderRuntime();
   renderQueue();
   renderProjectBoard();
+}
+
+function renderRuntime() {
+  const runtime = state.runtime;
+  if (!runtime) {
+    q('#runtime-readiness').textContent = 'Offline';
+    q('#runtime-meta').textContent = 'Runtime status unavailable.';
+    q('#capability-list').innerHTML = '';
+    return;
+  }
+
+  const ready = runtime.mode === 'real' && runtime.generator?.available;
+  const readiness = q('#runtime-readiness');
+  readiness.className = `badge ${ready ? 'ok' : 'waiting'}`;
+  readiness.textContent = ready ? 'ComfyUI connected' : `${runtime.mode} mode`;
+  const qwenState = runtime.mode === 'simulation'
+    ? 'not used in simulation'
+    : runtime.managed_qwen
+      ? 'managed on demand'
+      : runtime.model?.available
+        ? 'available'
+        : 'unavailable';
+  q('#runtime-meta').innerHTML = `
+    <span>Keyframe backend: <b>${esc(runtime.keyframe_image_backend)}</b></span>
+    <span>Unqualified override: <b>${runtime.allow_unqualified_capabilities ? 'enabled' : 'disabled'}</b></span>
+    <span>Qwen vision: <b>${esc(qwenState)}</b></span>
+    <span>Worker: <b>${runtime.worker_alive ? 'live' : 'idle'}</b></span>
+  `;
+
+  const overrideIds = new Set(runtime.unqualified_override_capabilities || []);
+  q('#capability-list').innerHTML = (runtime.capabilities || []).map((capability) => {
+    const stateLabel = capability.qualification_state.replaceAll('_', ' ');
+    const override = overrideIds.has(capability.id);
+    return `
+      <div class="capability-row">
+        <span>${esc(capability.id)}</span>
+        <span class="badge ${statusTone(capability.qualification_state)}">${esc(stateLabel)}</span>
+        ${override ? '<small>override available</small>' : ''}
+      </div>
+    `;
+  }).join('');
 }
 
 function renderOverview() {
@@ -280,15 +329,19 @@ function bindApprovalButtons() {
 
 async function bootstrap() {
   const runtime = q('#runtime');
-  try {
-    const status = await api('/api/status');
-    runtime.textContent = `${status.mode} / ${status.worker_alive ? 'worker live' : 'worker idle'}`;
-  } catch (error) {
-    runtime.textContent = 'offline';
-  }
-
   await refreshDashboard();
-  state.poll = setInterval(refreshDashboard, 2500);
+  state.poll = setInterval(() => {
+    refreshDashboard().then(() => {
+      const current = state.runtime;
+      runtime.textContent = current
+        ? `${current.mode} / ${current.worker_alive ? 'worker live' : 'worker idle'}`
+        : 'offline';
+    }).catch(() => { runtime.textContent = 'offline'; });
+  }, 2500);
+  const current = state.runtime;
+  runtime.textContent = current
+    ? `${current.mode} / ${current.worker_alive ? 'worker live' : 'worker idle'}`
+    : 'offline';
 
   q('#dashboard-refresh').onclick = () => refreshDashboard();
 }

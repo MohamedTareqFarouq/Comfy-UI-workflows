@@ -116,6 +116,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/status")
     def status() -> dict[str, Any]:
+        capabilities = components.orchestrator.capabilities.list()
+        capability_status = [
+            {
+                "id": item.id,
+                "media_type": item.media_type.value,
+                "qualification_state": item.qualification_state.value,
+            }
+            for item in capabilities
+        ]
         return {
             "mode": settings.execution_mode, "platform": settings.platform_mode,
             "generator": components.generator.health(), "model": components.model.health(),
@@ -124,6 +133,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "worker_alive": components.worker_alive,
             "allow_unqualified_capabilities": settings.allow_unqualified_capabilities,
             "keyframe_image_backend": settings.keyframe_image_backend,
+            "capabilities": capability_status,
+            "unqualified_override_capabilities": [
+                item["id"] for item in capability_status
+                if settings.allow_unqualified_capabilities
+                and item["qualification_state"] == "unqualified"
+                and item["media_type"] in {"image", "video", "evaluation"}
+            ],
         }
 
     @app.get("/api/projects")

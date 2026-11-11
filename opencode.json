@@ -10,7 +10,9 @@
         "environment": {
           "VVS_DATA_DIR": "{env:VVS_DATA_DIR}",
           "VVS_EXECUTION_MODE": "{env:VVS_EXECUTION_MODE}",
-          "VVS_COMFY_URL": "{env:VVS_COMFY_URL}"
+          "VVS_COMFY_URL": "{env:VVS_COMFY_URL}",
+          "VVS_ALLOW_UNQUALIFIED_CAPABILITIES": "{env:VVS_ALLOW_UNQUALIFIED_CAPABILITIES}",
+          "VVS_KEYFRAME_IMAGE_BACKEND": "{env:VVS_KEYFRAME_IMAGE_BACKEND}"
         }
       }
     }

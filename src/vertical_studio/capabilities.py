@@ -102,13 +102,24 @@ def _capabilities() -> list[Capability]:
         ),
         Capability(
             id="qwen.reference_analysis.v1", version="1.0.0", media_type=MediaType.ANALYSIS,
-            mode="reference_analysis", required_inputs=["artifacts"], model_family="Qwen Vision",
-            model_files=["qwen-vl"], resource_class="gpu_analysis", execution_time_class="medium",
+            mode="reference_analysis", required_inputs=["artifacts"],
+            model_family="FFmpeg + optional CV analysis", resource_class="cpu_analysis",
+            execution_time_class="medium",
+            limitations=[
+                "Extracts measurable timing, frame, OCR, similarity, and motion evidence; it does not perform semantic visual interpretation.",
+                "Optional CLIP/DINO-style metrics are reported as unavailable when their packages or models are not installed.",
+            ],
         ),
         Capability(
             id="media.visual_qa.v1", version="1.0.0", media_type=MediaType.EVALUATION,
             mode="technical_and_visual_qa", required_inputs=["artifacts"], model_family="FFmpeg + Qwen Vision",
             model_files=["qwen-vl"], resource_class="gpu_analysis", execution_time_class="medium",
+        ),
+        Capability(
+            id="media.technical_qa.v1", version="1.0.0", media_type=MediaType.EVALUATION,
+            mode="technical_qa", required_inputs=["artifacts"], model_family="FFmpeg",
+            resource_class="cpu_analysis", execution_time_class="short",
+            limitations=["Performs technical checks only; it does not judge semantic visual adherence."],
         ),
         Capability(
             id="ffmpeg.sequence_render.v1", version="1.0.0", media_type=MediaType.RENDER,
@@ -143,7 +154,7 @@ class CapabilityRegistry:
                 item.qualification_state = QualificationState.QUALIFIED
             elif item.workflow_template and not (self.workflows_dir / item.workflow_template).exists():
                 item.qualification_state = QualificationState.UNAVAILABLE
-            elif item.media_type in {MediaType.RENDER}:
+            elif item.media_type in {MediaType.RENDER, MediaType.ANALYSIS} or item.id == "media.technical_qa.v1":
                 item.qualification_state = QualificationState.QUALIFIED
             elif item.id in qualified:
                 item.qualification_state = QualificationState.QUALIFIED

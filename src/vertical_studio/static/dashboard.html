@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#10131a">
   <title>Agent Dashboard - Vertical Video Studio</title>
-  <link rel="stylesheet" href="/styles.css?v=dashboard-1">
-  <link rel="stylesheet" href="/dashboard.css?v=dashboard-1">
+  <link rel="stylesheet" href="/styles.css?v=dashboard-2">
+  <link rel="stylesheet" href="/dashboard.css?v=dashboard-2">
 </head>
 <body>
   <header>
@@ -23,6 +23,15 @@
 
   <main class="dashboard-shell">
     <section class="overview-grid" id="overview-grid"></section>
+
+    <section class="runtime-panel">
+      <div class="panel-header">
+        <h2>Runtime &amp; capabilities</h2>
+        <span id="runtime-readiness" class="badge">Checking</span>
+      </div>
+      <div id="runtime-meta" class="runtime-meta"></div>
+      <div id="capability-list" class="capability-list"></div>
+    </section>
 
     <section class="dashboard-grid">
       <aside class="dashboard-side">
@@ -43,6 +52,6 @@
     </section>
   </main>
 
-  <script src="/dashboard.js?v=dashboard-1" defer></script>
+  <script src="/dashboard.js?v=dashboard-2" defer></script>
 </body>
 </html>

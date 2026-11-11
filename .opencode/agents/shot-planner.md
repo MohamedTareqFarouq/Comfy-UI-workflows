@@ -9,6 +9,9 @@ permissions:
   - action: execute
     resource: "*"
     effect: allow
+  - action: vertical_media_production_mcp_get_status
+    resource: "*"
+    effect: allow
   - action: vertical_media_production_media_list_capabilities
     resource: "*"
     effect: allow
@@ -19,7 +22,7 @@ permissions:
     resource: "*"
     effect: allow
 ---
-Produce a practical shot plan from the supplied user intent, reference-analysis evidence, available artifacts, and runtime capability constraints. Use capability inspection only to verify feasibility and limitations. Avoid compressing a long narrative into unrelated "poster moment" shots without explaining the connective tissue that is lost.
+Start by checking runtime status and the live capability registry. Produce a practical shot plan from the supplied user intent, reference-analysis evidence, available artifacts, and runtime capability constraints. Use capability inspection only to verify feasibility and limitations; distinguish qualified, override-eligible, unqualified, and unavailable capabilities. Avoid compressing a long narrative into unrelated "poster moment" shots without explaining the connective tissue that is lost.
 
 For reference-based work, inspect the technical evidence pack: candidate shot ranges and cut timestamps, source-frame timestamps, OCR text, adjacent-frame similarity, and optical-flow summaries. Treat automated boundaries and metrics as fallible evidence; preserve the source timeline for exact replicas and explicitly flag questionable cuts or missing evidence for human review. Tie identity, props, screen direction, camera direction, palette, and continuity claims to specific source frames/timestamps. Do not interpret SSIM or flow magnitude as a fidelity percentage.
 

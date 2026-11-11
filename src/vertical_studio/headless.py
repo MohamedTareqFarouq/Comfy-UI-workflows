@@ -29,6 +29,7 @@ from .schemas import utc_now
 from .services.comfy import ComfyClient, GenerationError
 from .services.gpu import GpuCoordinator
 from .services.media import analyze_reference_video, probe_media, sha256_file
+from .services.model_gateway import ModelGateway, ModelUnavailable
 from .services.mock_comfy import MockComfyClient
 from .services.qa import QualityService
 from .services.renderer import Renderer
@@ -155,8 +156,22 @@ class HeadlessMediaService:
             allow_unqualified=settings.allow_unqualified_capabilities,
         )
         self.generator = MockComfyClient() if settings.is_simulation else ComfyClient(settings.comfy_url, settings.workflows_dir)
-        self.qa = QualityService(enable_visual_review=False)
-        self.gpu = GpuCoordinator(self.generator, None, simulation=settings.is_simulation)
+        self.model = ModelGateway(
+            settings.llama_url,
+            settings.qwen_model,
+            timeout=settings.qwen_request_timeout,
+            managed=settings.manage_qwen and not settings.is_simulation,
+            executable=settings.llama_executable,
+            hf_repo=settings.qwen_hf_repo,
+            gpu_layers=settings.qwen_gpu_layers,
+            context_size=settings.qwen_context_size,
+            start_timeout=settings.qwen_start_timeout,
+            log_path=settings.data_dir / "logs" / "qwen.log",
+        )
+        self.qa = QualityService(self.model, enable_visual_review=True)
+        self.gpu = GpuCoordinator(
+            self.generator, self.model, simulation=settings.is_simulation
+        )
         self.renderer = Renderer()
         self.root = settings.data_dir / "headless"
         self.artifacts_dir = self.root / "artifacts"
@@ -184,6 +199,7 @@ class HeadlessMediaService:
             self.generator.interrupt()
         if self._thread:
             self._thread.join(timeout=5)
+        self.model.unload()
 
     def recover(self) -> None:
         now = utc_now()
@@ -358,18 +374,86 @@ class HeadlessMediaService:
         return [*output_artifact_ids, report_id]
 
     def _execute_evaluation(self, operation: dict[str, Any], target: Path) -> list[str]:
+        request = operation["request"]
+        use_visual = bool(request.get("use_visual_critique", False))
+        context = {
+            "goal_mode": request.get("goal_mode", "adaptation"),
+            "requirements": request.get("requirements", {}),
+        }
+        input_artifacts = [
+            self.store.artifact(artifact_id)
+            for artifact_id in operation["input_artifact_ids"]
+        ]
+        reference_artifacts = [
+            item for item in input_artifacts
+            if item["media_type"] == "image"
+            and item["disposition"] in {"canonical", "approved"}
+        ]
+        targets = [item for item in input_artifacts if item not in reference_artifacts]
+        if not targets:
+            targets = input_artifacts
+        reference_images = [Path(item["path"]) for item in reference_artifacts]
+
+        def inspect_with_policy(inspector, *args, **kwargs):
+            if not use_visual:
+                return inspector(*args, **kwargs, use_visual_review=False)
+            try:
+                with self.gpu.qwen():
+                    return inspector(*args, **kwargs, use_visual_review=True)
+            except ModelUnavailable as exc:
+                report = inspector(*args, **kwargs, use_visual_review=False)
+                return report.model_copy(update={
+                    "advisory_pass": False,
+                    "evaluator": "manual_review_required",
+                    "reasons": [
+                        *report.reasons,
+                        f"visual review unavailable: {exc}; technical checks are not a visual pass",
+                    ],
+                })
+
         reports = []
-        for artifact_id in operation["input_artifact_ids"]:
-            artifact = self.store.artifact(artifact_id)
-            if artifact["media_type"] != "video":
-                report = {"technical_pass": Path(artifact["path"]).exists(), "advisory_pass": True,
-                          "scores": {"accessible": 1.0}, "reasons": [], "retry_recommendation": None}
-            else:
-                qa = self.qa.inspect_video(
-                    Path(artifact["path"]), target / artifact_id,
-                    goal_mode=request.get("goal_mode", "adaptation"),
+        for artifact in targets:
+            artifact_id = artifact["id"]
+            if artifact["media_type"] == "video":
+                qa = inspect_with_policy(
+                    self.qa.inspect_video,
+                    Path(artifact["path"]),
+                    target / artifact_id,
+                    context=context,
+                    reference_images=reference_images,
+                    goal_mode=context["goal_mode"],
                 )
-                report = {**qa.model_dump(), "retry_recommendation": None if qa.technical_pass else "retry_with_changed_settings"}
+                report = {
+                    **qa.model_dump(),
+                    "retry_recommendation": (
+                        None if qa.technical_pass and qa.advisory_pass
+                        else "human_review_or_repair"
+                    ),
+                }
+            elif artifact["media_type"] == "image":
+                qa = inspect_with_policy(
+                    self.qa.inspect_image,
+                    Path(artifact["path"]),
+                    context=context,
+                    reference_images=reference_images,
+                    goal_mode=context["goal_mode"],
+                )
+                report = {
+                    **qa.model_dump(),
+                    "retry_recommendation": (
+                        None if qa.technical_pass and qa.advisory_pass
+                        else "human_review_or_repair"
+                    ),
+                }
+            else:
+                accessible = Path(artifact["path"]).exists()
+                report = {
+                    "technical_pass": accessible,
+                    "advisory_pass": False,
+                    "evaluator": "unsupported_media_type",
+                    "reasons": ["evaluation supports image and video artifacts"],
+                    "retry_recommendation": None,
+                }
             reports.append({"artifact_id": artifact_id, **report})
             with self.store.connect() as connection:
                 connection.execute("UPDATE media_artifacts SET qa_json=? WHERE id=?", (json.dumps(report), artifact_id))
@@ -601,7 +685,11 @@ class HeadlessMediaService:
         return self._submit("qwen.reference_analysis.v1", {"artifact_ids": artifact_ids}, artifact_ids, [], idempotency_key, session_id)
 
     def evaluate(self, request: EvaluationRequest) -> dict[str, Any]:
-        return self._submit("media.visual_qa.v1", request.model_dump(mode="json"), request.artifact_ids, [],
+        capability_id = (
+            "media.visual_qa.v1"
+            if request.use_visual_critique else "media.technical_qa.v1"
+        )
+        return self._submit(capability_id, request.model_dump(mode="json"), request.artifact_ids, [],
                             request.idempotency_key, request.production_session_id)
 
     def render(self, request: RenderRequest) -> dict[str, Any]:

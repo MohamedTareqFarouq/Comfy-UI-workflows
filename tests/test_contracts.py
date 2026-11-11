@@ -189,6 +189,36 @@ def test_qwen_runtime_environment_is_explicit(monkeypatch, tmp_path: Path) -> No
     settings = load_settings()
     assert settings.allow_unqualified_capabilities is True
     assert settings.keyframe_image_backend == "qwen_image21"
+    monkeypatch.setenv("VVS_KEYFRAME_IMAGE_BACKEND", "")
+    assert load_settings().keyframe_image_backend == "klein"
+
+
+def test_qa_agent_has_read_only_analysis_and_evaluation_tools() -> None:
+    root = Path(__file__).resolve().parents[1]
+    agent = (root / ".opencode" / "agents" / "qa-reviewer.md").read_text()
+    for action in (
+        "vertical_media_production_mcp_get_status",
+        "vertical_media_production_media_list_capabilities",
+        "vertical_media_production_media_inspect_capability",
+        "vertical_media_production_media_analyze_reference",
+        "vertical_media_production_media_evaluate",
+        "vertical_media_production_media_get_operation",
+        "vertical_media_production_media_get_artifact",
+    ):
+        assert action in agent
+    assert "SSIM" in agent and "optical flow" in agent and "CLIP/DINO" in agent
+    assert "Never change an artifact's disposition" in agent
+
+
+def test_all_agents_are_told_to_discover_live_capabilities() -> None:
+    root = Path(__file__).resolve().parents[1]
+    agents = root / ".opencode" / "agents"
+    agent_files = list(agents.glob("*.md"))
+    assert len(agent_files) >= 8
+    for path in agent_files:
+        instructions = path.read_text()
+        assert "mcp_get_status" in instructions, path.name
+        assert "media_list_capabilities" in instructions, path.name
 
 
 def test_storyboard_enforces_endpoint_environment_continuity() -> None:

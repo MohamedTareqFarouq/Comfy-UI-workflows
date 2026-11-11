@@ -167,6 +167,10 @@ def build_mcp(settings: Settings | None = None) -> tuple[MCPServer, HeadlessMedi
             {"available": False, "checked": False, "reason": "Simulation uses a local mock backend."}
             if simulation else {**media.generator.health(), "checked": True}
         )
+        qwen = (
+            {"available": False, "checked": False, "reason": "Simulation does not use Qwen."}
+            if simulation else {**media.model.health(), "checked": True}
+        )
         capabilities = [
             {
                 "id": item.id,
@@ -180,11 +184,22 @@ def build_mcp(settings: Settings | None = None) -> tuple[MCPServer, HeadlessMedi
             "execution_mode": settings.execution_mode,
             "backend": "mock_simulator" if simulation else "comfyui",
             "comfyui": comfy,
+            "qwen": qwen,
+            "managed_qwen": settings.manage_qwen,
+            "qwen_loaded": media.model.owned,
+            "allow_unqualified_capabilities": settings.allow_unqualified_capabilities,
+            "keyframe_image_backend": settings.keyframe_image_backend,
             "capabilities": capabilities,
             "real_generation_ready_capabilities": [
                 item["id"] for item in capabilities
                 if real_ready and item["qualification_state"] == "qualified"
                 and item["media_type"] in {"image", "video"}
+            ],
+            "unqualified_override_capabilities": [
+                item["id"] for item in capabilities
+                if settings.allow_unqualified_capabilities
+                and item["qualification_state"] == "unqualified"
+                and item["media_type"] in {"image", "video", "evaluation"}
             ],
             "simulation_warning": (
                 "Generated files are local simulation placeholders, not ComfyUI results."
@@ -230,8 +245,8 @@ def build_mcp(settings: Settings | None = None) -> tuple[MCPServer, HeadlessMedi
             "backend": "mock_simulator" if settings.is_simulation else "comfyui"}
 
     @traced_tool
-    def media_evaluate(request: Annotated[EvaluationRequest, Field(description="Artifact IDs and optional technical requirements to evaluate.")]) -> dict[str, Any]:
-        """Queue technical validation and structured QA without automatically retrying."""
+    def media_evaluate(request: Annotated[EvaluationRequest, Field(description="Artifact IDs and optional requirements. Set use_visual_critique=true to request Qwen review when qualified or override-eligible; otherwise performs technical-only QA.")]) -> dict[str, Any]:
+        """Queue technical-only QA or Qwen-backed visual critique; never automatically retries."""
         return media.evaluate(request)
 
     @traced_tool

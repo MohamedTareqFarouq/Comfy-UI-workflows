@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from vertical_studio.headless_schemas import (
     ProductionBudgets,
     ProductionTaskRequest,
     ArtifactRef,
+    EvaluationRequest,
     ImageGenerationRequest,
     ProductionStartRequest,
     ReferenceRole,
@@ -23,7 +25,9 @@ from vertical_studio.headless_schemas import (
 )
 from vertical_studio.services.media import run_ffmpeg
 from vertical_studio.services.gpu import GpuCoordinator
+from vertical_studio.services.model_gateway import ModelUnavailable
 from vertical_studio.mcp_server import build_mcp
+from vertical_studio.schemas import QAReport
 
 
 @pytest.fixture
@@ -246,6 +250,9 @@ def test_real_registry_uses_persisted_per_capability_qualification(tmp_path: Pat
     service = HeadlessMediaService(settings)
     assert service.registry.get("flux_klein.t2i.v1").qualification_state == "qualified"
     assert service.registry.get("wan22.i2v.v1").qualification_state == "unqualified"
+    assert service.registry.get("qwen.reference_analysis.v1").qualification_state == "qualified"
+    assert service.registry.get("media.technical_qa.v1").qualification_state == "qualified"
+    assert service.registry.get("media.visual_qa.v1").qualification_state == "unqualified"
 
 
 def test_unqualified_override_allows_execution_without_qualifying_capability(tmp_path: Path) -> None:
@@ -394,6 +401,97 @@ def test_mcp_exposes_atomic_and_production_control_contract(headless) -> None:
         service.stop()
 
 
+def test_media_evaluate_uses_request_and_qwen_visual_critique(
+    headless, tmp_path: Path, monkeypatch
+) -> None:
+    video = tmp_path / "qa-target.mp4"
+    run_ffmpeg([
+        "-f", "lavfi", "-i", "color=c=blue:s=160x90:r=8:d=1",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(video),
+    ])
+    imported = headless.import_reference(str(video), "start_frame", "qa-target-video-0001")
+    observed: dict = {}
+
+    def inspect_video(path: Path, sample_dir: Path, **kwargs) -> QAReport:
+        observed.update(path=path, sample_dir=sample_dir, kwargs=kwargs)
+        return QAReport(
+            technical_pass=True, advisory_pass=True, evaluator="test-qwen",
+            goal_mode=kwargs["goal_mode"],
+        )
+
+    monkeypatch.setattr(headless.qa, "inspect_video", inspect_video)
+    queued = headless.evaluate(EvaluationRequest(
+        artifact_ids=[imported["id"]],
+        goal_mode="adaptation",
+        use_visual_critique=True,
+        requirements={"subject": "blue sphere"},
+        idempotency_key="qa-visual-request-0001",
+    ))
+
+    assert headless.run_once()
+    completed = headless.store.operation(queued["id"])
+    assert completed["state"] == "succeeded"
+    assert observed["kwargs"]["use_visual_review"] is True
+    assert observed["kwargs"]["context"]["requirements"] == {"subject": "blue sphere"}
+
+
+def test_media_evaluate_defaults_to_technical_qa_without_qwen(headless, tmp_path: Path) -> None:
+    image = tmp_path / "qa-image.png"
+    run_ffmpeg([
+        "-f", "lavfi", "-i", "color=c=blue:s=160x90:d=0.1",
+        "-frames:v", "1", str(image),
+    ])
+    imported = headless.import_reference(str(image), "identity", "qa-image-technical-0001")
+    queued = headless.evaluate(EvaluationRequest(
+        artifact_ids=[imported["id"]],
+        idempotency_key="qa-technical-default-0001",
+    ))
+
+    assert queued["capability_id"] == "media.technical_qa.v1"
+    assert headless.run_once()
+    completed = headless.store.operation(queued["id"])
+    assert completed["state"] == "succeeded"
+    report_artifact = headless.store.artifact(completed["result_artifact_ids"][0])
+    report = json.loads(Path(report_artifact["path"]).read_text())["reports"][0]
+    assert report["technical_pass"] is True
+    assert report["evaluator"] == "technical_only"
+
+
+def test_media_evaluate_returns_manual_fallback_when_qwen_is_unavailable(
+    headless, tmp_path: Path, monkeypatch
+) -> None:
+    video = tmp_path / "qa-fallback.mp4"
+    run_ffmpeg([
+        "-f", "lavfi", "-i", "color=c=green:s=160x90:r=8:d=1",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(video),
+    ])
+    imported = headless.import_reference(str(video), "start_frame", "qa-fallback-video-0001")
+
+    def inspect_video(path: Path, sample_dir: Path, **kwargs) -> QAReport:
+        if kwargs["use_visual_review"]:
+            raise ModelUnavailable("Qwen is offline")
+        return QAReport(
+            technical_pass=True, advisory_pass=True, evaluator="technical_only",
+            goal_mode=kwargs["goal_mode"],
+        )
+
+    monkeypatch.setattr(headless.qa, "inspect_video", inspect_video)
+    queued = headless.evaluate(EvaluationRequest(
+        artifact_ids=[imported["id"]],
+        use_visual_critique=True,
+        idempotency_key="qa-visual-fallback-0001",
+    ))
+
+    assert headless.run_once()
+    completed = headless.store.operation(queued["id"])
+    assert completed["state"] == "succeeded"
+    report_artifact = headless.store.artifact(completed["result_artifact_ids"][0])
+    report = json.loads(Path(report_artifact["path"]).read_text())["reports"][0]
+    assert report["evaluator"] == "manual_review_required"
+    assert report["advisory_pass"] is False
+    assert "Qwen is offline" in report["reasons"][-1]
+
+
 def test_mcp_marks_simulated_generation_in_status_operation_and_artifact(headless) -> None:
     server, service = build_mcp(headless.settings)
     try:
@@ -401,6 +499,10 @@ def test_mcp_marks_simulated_generation_in_status_operation_and_artifact(headles
         status = status_result.model_dump(mode="json", by_alias=True)["structuredContent"]
         assert status["execution_mode"] == "simulation"
         assert status["backend"] == "mock_simulator"
+        assert status["qwen"]["checked"] is False
+        assert status["allow_unqualified_capabilities"] is False
+        assert status["keyframe_image_backend"] == "klein"
+        assert status["unqualified_override_capabilities"] == []
         assert status["comfyui"]["checked"] is False
         assert "not ComfyUI results" in status["simulation_warning"]
 
@@ -423,6 +525,29 @@ def test_mcp_marks_simulated_generation_in_status_operation_and_artifact(headles
         assert artifact["metadata"]["execution_mode"] == "simulation"
         assert artifact["metadata"]["simulated"] is True
         assert "prompt_id" not in artifact["metadata"]
+    finally:
+        service.stop()
+
+
+def test_mcp_status_exposes_enabled_unqualified_override(headless, monkeypatch) -> None:
+    settings = replace(
+        headless.settings,
+        execution_mode="real",
+        allow_unqualified_capabilities=True,
+        keyframe_image_backend="qwen_image21",
+    )
+    server, service = build_mcp(settings)
+    monkeypatch.setattr(service.generator, "health", lambda: {"available": True})
+    try:
+        status_result = asyncio.run(server.call_tool("mcp_get_status", {}))
+        status = status_result.model_dump(mode="json", by_alias=True)["structuredContent"]
+        capability_states = {item["id"]: item["qualification_state"] for item in status["capabilities"]}
+        assert status["allow_unqualified_capabilities"] is True
+        assert status["keyframe_image_backend"] == "qwen_image21"
+        assert capability_states["qwen_image21.multi_reference.v1"] == "unqualified"
+        assert "qwen_image21.multi_reference.v1" in status["unqualified_override_capabilities"]
+        assert "media.visual_qa.v1" in status["unqualified_override_capabilities"]
+        assert "qwen_image21.multi_reference.v1" not in status["real_generation_ready_capabilities"]
     finally:
         service.stop()
 

@@ -21,6 +21,7 @@ def test_pwa_and_project_api_contract(components) -> None:
         assert "Planning storyboard with Qwen" in script.text
 
         observability = client.get("/observability.html")
+        dashboard = client.get("/dashboard.html")
         assert "Uploading reference video" in script.text
         assert "uploadReference" in script.text
         assert 'idea.required=!reference' in script.text
@@ -29,8 +30,21 @@ def test_pwa_and_project_api_contract(components) -> None:
         assert "error.status=response.status" in script.text
         assert observability.status_code == 200
         assert "Prompt and decision audit" in observability.text
+        assert dashboard.status_code == 200
+        assert "Runtime &amp; capabilities" in dashboard.text
+        status = client.get("/api/status").json()
+        assert status["keyframe_image_backend"] == "klein"
+        assert status["allow_unqualified_capabilities"] is False
+        assert any(
+            item["id"] == "qwen_image21.multi_reference.v1"
+            for item in status["capabilities"]
+        )
         audit_script = client.get("/observability.js")
         assert audit_script.status_code == 200
+        dashboard_script = client.get("/dashboard.js")
+        assert dashboard_script.status_code == 200
+        assert "Qwen vision" in dashboard_script.text
+        assert "qualification_state" in dashboard_script.text
 
         created = client.post(
             "/api/projects",

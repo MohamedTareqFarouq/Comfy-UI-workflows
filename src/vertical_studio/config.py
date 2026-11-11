@@ -57,7 +57,7 @@ def load_settings() -> Settings:
         "VVS_DATA_DIR", Path.home() / ".local" / "share" / "vertical-video-studio"
     )
     export_dir = _path_env("VVS_EXPORT_DIR", data_dir / "exports")
-    keyframe_image_backend = os.getenv("VVS_KEYFRAME_IMAGE_BACKEND", "klein").lower()
+    keyframe_image_backend = (os.getenv("VVS_KEYFRAME_IMAGE_BACKEND") or "klein").lower()
     if keyframe_image_backend not in {"klein", "qwen_image21"}:
         raise ValueError("VVS_KEYFRAME_IMAGE_BACKEND must be 'klein' or 'qwen_image21'")
     settings = Settings(
