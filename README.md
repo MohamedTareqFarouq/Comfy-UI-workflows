@@ -137,6 +137,8 @@ The application reads environment variables. Important settings are:
 | `VVS_DATA_DIR` | `~/.local/share/vertical-video-studio` | SQLite database, projects, attempts and qualification reports. |
 | `VVS_EXPORT_DIR` | `$VVS_DATA_DIR/exports` | Completed MP4 files. |
 | `VVS_EXECUTION_MODE` | `simulation` | `simulation` or explicitly configured `real`. |
+| `VVS_ALLOW_UNQUALIFIED_CAPABILITIES` | `false` | Explicitly allow capability execution before target-machine qualification. Results remain labeled unqualified and record the override. Missing workflow templates remain unavailable. |
+| `VVS_KEYFRAME_IMAGE_BACKEND` | `klein` | Production keyframe image-edit backend: `klein` or `qwen_image21`. Qwen requires its workflow and models plus qualification, unless the unqualified override is enabled. |
 | `VVS_HOST` | `127.0.0.1` | Web server address. |
 | `VVS_PORT` | `8765` | Web server port. |
 | `VVS_COMFY_URL` | `http://127.0.0.1:8188` | ComfyUI API endpoint. |

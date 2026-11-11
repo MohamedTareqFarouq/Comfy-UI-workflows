@@ -270,6 +270,14 @@ class ComfyClient:
         seed: int, source_path: Path, reference_path: Path | None,
         output_prefix: str,
     ) -> GenerationResult:
+        if payload.get("image_edit_backend", "klein") == "qwen_image21":
+            references = [{"path": str(source_path), "role": "primary"}]
+            if reference_path is not None:
+                references.append({"path": str(reference_path), "role": "additional"})
+            return self._generate_qwen_image21(
+                output_dir, payload, prompt=prompt, seed=seed,
+                references=references, output_prefix=output_prefix,
+            )
         template = (
             payload.get("edit_template", "flux_edit_api")
             if reference_path is not None

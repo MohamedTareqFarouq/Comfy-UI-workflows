@@ -2,6 +2,7 @@ from __future__ import annotations
 import hashlib, json, math, shutil
 from pathlib import Path
 from typing import Any
+from .capabilities import CapabilityRegistry
 from .config import Settings
 from .db import Database
 from .schemas import (ApprovalRequest, ArtifactKind, ArtifactSelection, CanonicalAssetPromptProposal,
@@ -23,6 +24,12 @@ class Orchestrator:
                  research: BraveResearchProvider, gpu: GpuCoordinator):
         self.db, self.settings, self.model, self.research = db, settings, model, research
         self.gpu = gpu
+        self.capabilities = CapabilityRegistry(
+            settings.workflows_dir,
+            simulation=settings.is_simulation,
+            qualification_report=settings.data_dir / "qualification" / "latest.json",
+            allow_unqualified=settings.allow_unqualified_capabilities,
+        )
 
     def reconcile_project_state(self, project_id: str) -> Project:
         """Advance persisted project milestones implied by completed scene states."""
@@ -818,6 +825,8 @@ class Orchestrator:
     def queue_keyframes(self, scene_id: str, retry: RetryRequest | None = None) -> Job:
         scene = self.db.get_scene(scene_id)
         project = self.db.get_project(scene.project_id)
+        if self.settings.keyframe_image_backend == "qwen_image21":
+            self.capabilities.require_executable("qwen_image21.multi_reference.v1")
         active = self._active(scene_id, JobKind.KEYFRAME)
         if active: return active
         assets = self.db.list_canonical_assets(scene.project_id)
@@ -853,6 +862,7 @@ class Orchestrator:
                    "candidates": 1, "width": 384, "height": 672,
                    "generation_mode": "anchor" if scene.spec.starts_new_continuity else "continuation",
                    "t2i_template": "flux_t2i_api",
+                   "image_edit_backend": self.settings.keyframe_image_backend,
                    "single_edit_template": "image_flux2_klein_image_edit_4b_distilled_api",
                    "edit_template": "flux_edit_api",
                    "generation_round": len(prior) + 1,

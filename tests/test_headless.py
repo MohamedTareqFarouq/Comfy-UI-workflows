@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from vertical_studio.capabilities import RoutingError
+from vertical_studio.capabilities import CapabilityRegistry, RoutingError
 from vertical_studio.cli import main as cli_main
 from vertical_studio.config import Settings
 from vertical_studio.headless import HeadlessMediaService, ProductionService
@@ -246,6 +246,26 @@ def test_real_registry_uses_persisted_per_capability_qualification(tmp_path: Pat
     service = HeadlessMediaService(settings)
     assert service.registry.get("flux_klein.t2i.v1").qualification_state == "qualified"
     assert service.registry.get("wan22.i2v.v1").qualification_state == "unqualified"
+
+
+def test_unqualified_override_allows_execution_without_qualifying_capability(tmp_path: Path) -> None:
+    repo = Path(__file__).resolve().parents[1]
+    registry = CapabilityRegistry(
+        repo / "workflows", simulation=False, allow_unqualified=True
+    )
+    capability = registry.require_executable("qwen_image21.multi_reference.v1")
+    assert capability.qualification_state == "unqualified"
+    listed = next(
+        item for item in registry.list()
+        if item.id == "qwen_image21.multi_reference.v1"
+    )
+    assert any("remains unqualified" in item for item in listed.limitations)
+
+    unavailable = CapabilityRegistry(
+        tmp_path / "missing-workflows", simulation=False, allow_unqualified=True
+    )
+    with pytest.raises(RoutingError, match="unavailable"):
+        unavailable.require_executable("qwen_image21.multi_reference.v1")
 
 
 def test_image_operation_is_idempotent_and_records_lineage(headless) -> None:

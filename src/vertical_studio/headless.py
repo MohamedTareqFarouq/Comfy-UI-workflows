@@ -18,6 +18,7 @@ from .headless_schemas import (
     ImageGenerationRequest,
     MediaType,
     OperationState,
+    QualificationState,
     ProductionStartRequest,
     ProductionTaskRequest,
     ReferenceRole,
@@ -151,6 +152,7 @@ class HeadlessMediaService:
             settings.workflows_dir,
             simulation=settings.is_simulation,
             qualification_report=settings.data_dir / "qualification" / "latest.json",
+            allow_unqualified=settings.allow_unqualified_capabilities,
         )
         self.generator = MockComfyClient() if settings.is_simulation else ComfyClient(settings.comfy_url, settings.workflows_dir)
         self.qa = QualityService(enable_visual_review=False)
@@ -386,6 +388,15 @@ class HeadlessMediaService:
 
     def _record_generated(self, operation: dict[str, Any], path: Path, metadata: dict[str, Any], disposition: str) -> str:
         artifact_id = uuid.uuid4().hex
+        capability = self.registry.get(operation["capability_id"])
+        metadata = {
+            **metadata,
+            "capability_qualification_state": capability.qualification_state.value,
+            "unqualified_execution_override": (
+                capability.qualification_state == QualificationState.UNQUALIFIED
+                and self.registry.allow_unqualified
+            ),
+        }
         media_type = "video" if path.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"} else "image"
         if path.suffix.lower() == ".json": media_type = "analysis"
         probe = {}

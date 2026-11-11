@@ -106,7 +106,9 @@ def build_mcp(settings: Settings | None = None) -> tuple[MCPServer, HeadlessMedi
             "before generation. Use artifact IDs and explicit reference roles. A queued or running operation "
             "is not complete: poll media_get_operation until succeeded, failed, or cancelled. If it fails, "
             "read its failure field and mcp_get_recent_calls; do not claim success or invent missing values. "
-            "Generation is never approval. OpenCode owns creative reasoning; this service owns validated "
+            + ("An explicit unqualified-capability override is enabled: you may select unqualified capabilities, but must disclose that they are unqualified. "
+               if settings.allow_unqualified_capabilities else "Unqualified capabilities cannot execute unless VVS_ALLOW_UNQUALIFIED_CAPABILITIES is enabled. ")
+            + "Generation is never approval. OpenCode owns creative reasoning; this service owns validated "
             "execution, persistence, approvals, budgets, and cancellation."
         ),
     )
@@ -217,7 +219,7 @@ def build_mcp(settings: Settings | None = None) -> tuple[MCPServer, HeadlessMedi
 
     @traced_tool
     def media_generate_image(request: Annotated[ImageGenerationRequest, Field(description="Image prompt, dimensions, references, seed, candidate count, and idempotency key.")]) -> dict[str, Any]:
-        """Queue routed T2I, single-reference, or one-through-four-reference image generation."""
+        """Queue routed T2I, Klein reference editing, or optional Qwen Image 2.1 editing via preferred_capability."""
         return {**media.generate_image(request), "execution_mode": settings.execution_mode,
             "backend": "mock_simulator" if settings.is_simulation else "comfyui"}
 

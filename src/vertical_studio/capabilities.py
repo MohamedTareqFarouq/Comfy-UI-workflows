@@ -121,10 +121,12 @@ def _capabilities() -> list[Capability]:
 
 class CapabilityRegistry:
     def __init__(self, workflows_dir: Path, *, simulation: bool = True,
-                 qualification_report: Path | None = None):
+                 qualification_report: Path | None = None,
+                 allow_unqualified: bool = False):
         self.workflows_dir = workflows_dir
         self.simulation = simulation
         self.qualification_report = qualification_report
+        self.allow_unqualified = allow_unqualified
         self._items = {item.id: item for item in _capabilities()}
         self._refresh_states()
 
@@ -150,7 +152,14 @@ class CapabilityRegistry:
 
     def list(self) -> list[Capability]:
         self._refresh_states()
-        return [deepcopy(item) for item in self._items.values()]
+        items = [deepcopy(item) for item in self._items.values()]
+        if self.allow_unqualified:
+            for item in items:
+                if item.qualification_state == QualificationState.UNQUALIFIED:
+                    item.limitations.append(
+                        "Unqualified execution override is enabled; this capability remains unqualified."
+                    )
+        return items
 
     def get(self, capability_id: str) -> Capability:
         self._refresh_states()
@@ -161,6 +170,8 @@ class CapabilityRegistry:
 
     def require_executable(self, capability_id: str) -> Capability:
         item = self.get(capability_id)
+        if item.qualification_state == QualificationState.UNQUALIFIED and self.allow_unqualified:
+            return item
         if item.qualification_state != QualificationState.QUALIFIED:
             raise RoutingError(
                 "capability_not_qualified",

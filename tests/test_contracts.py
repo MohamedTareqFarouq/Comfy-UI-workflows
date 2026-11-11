@@ -150,6 +150,47 @@ def test_qwen_image21_capability_patches_uploaded_references(monkeypatch, tmp_pa
     assert patches[("476", "image")] == "input/identity.png"
 
 
+def test_qwen_image21_can_be_selected_for_keyframe_edits(monkeypatch, tmp_path: Path) -> None:
+    client = ComfyClient("http://127.0.0.1:8188", Path(__file__).resolve().parents[1] / "workflows")
+    captured: dict = {}
+    monkeypatch.setattr(client, "_upload_image", lambda path: Path(path).name)
+
+    def fake_run(template: str, payload: dict, output_dir: Path) -> GenerationResult:
+        captured.update(template=template, payload=payload)
+        return GenerationResult(files=[], metadata={})
+
+    monkeypatch.setattr(client, "_run", fake_run)
+    client._generate_edit_image(
+        tmp_path / "out",
+        {"image_edit_backend": "qwen_image21", "negative_prompt": "blur"},
+        prompt="Keep the subject consistent",
+        seed=23,
+        source_path=tmp_path / "start.png",
+        reference_path=tmp_path / "character.png",
+        output_prefix="scene-start",
+    )
+
+    patches = {
+        (patch["node_id"], patch["input"]): patch["value"]
+        for patch in captured["payload"]["patches"]
+    }
+    assert captured["template"] == "qwen_image21_edit_api"
+    assert patches[("470", "image")] == "start.png"
+    assert patches[("476", "image")] == "character.png"
+    assert patches[("459:458", "seed")] == 23
+
+
+def test_qwen_runtime_environment_is_explicit(monkeypatch, tmp_path: Path) -> None:
+    from vertical_studio.config import load_settings
+
+    monkeypatch.setenv("VVS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("VVS_ALLOW_UNQUALIFIED_CAPABILITIES", "true")
+    monkeypatch.setenv("VVS_KEYFRAME_IMAGE_BACKEND", "qwen_image21")
+    settings = load_settings()
+    assert settings.allow_unqualified_capabilities is True
+    assert settings.keyframe_image_backend == "qwen_image21"
+
+
 def test_storyboard_enforces_endpoint_environment_continuity() -> None:
     assets = [
         {"key": "leo", "role": "character", "label": "Leo", "prompt": "Leo alone"},
@@ -389,13 +430,53 @@ def test_mock_failure_contract(tmp_path: Path, failure: str, transient: bool) ->
 
 def test_qualification_is_diagnostics_only_by_default(components) -> None:
     from vertical_studio.qualification import QualificationError, QualificationService
+    import json
 
+    qualification_path = components.settings.data_dir / "qualification" / "latest.json"
+    qualification_path.parent.mkdir(parents=True, exist_ok=True)
+    qualification_path.write_text(json.dumps({
+        "qualified_capabilities": ["qwen_image21.multi_reference.v1"]
+    }))
     service = QualificationService(components.settings)
     report = service.run("diagnostics")
     assert report["qualified"] is False
-    assert Path(report["report_path"]).exists()
+    report_path = Path(report["report_path"])
+    assert report_path.exists()
+    assert json.loads(report_path.read_text())["report_path"] == str(report_path)
+    assert report_path == qualification_path.parent / "diagnostics" / "latest.json"
+    assert json.loads(qualification_path.read_text())["qualified_capabilities"] == [
+        "qwen_image21.multi_reference.v1"
+    ]
     with pytest.raises(QualificationError, match="confirm"):
         service.run("smoke")
+
+
+def test_smoke_qualification_saves_report_with_run_artifacts(tmp_path: Path) -> None:
+    import json
+
+    from vertical_studio.config import Settings
+    from vertical_studio.qualification import QualificationService
+
+    data_dir = tmp_path / "data"
+    settings = Settings(
+        data_dir=data_dir, db_path=data_dir / "studio.sqlite3",
+        projects_dir=data_dir / "projects", export_dir=data_dir / "exports",
+        static_dir=tmp_path / "static", workflows_dir=tmp_path / "workflows",
+    )
+    run_dir = data_dir / "qualification" / "smoke-run-001"
+    output = run_dir / "flux-t2i" / "sample.png"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"smoke artifact")
+    report = QualificationService(settings)._save({
+        "level": "smoke",
+        "run_dir": str(run_dir),
+        "runs": [{"outputs": [{"path": str(output)}]}],
+    })
+
+    latest = json.loads(Path(report["report_path"]).read_text())
+    run_report = json.loads(Path(report["run_report_path"]).read_text())
+    assert latest == run_report == report
+    assert Path(latest["runs"][0]["outputs"][0]["path"]).exists()
 
 
 def test_image_review_accepts_schema_named_wrapper(monkeypatch, tmp_path: Path) -> None:

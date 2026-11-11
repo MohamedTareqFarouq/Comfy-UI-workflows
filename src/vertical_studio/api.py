@@ -122,6 +122,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "data_dir": str(settings.data_dir), "real_generation_enabled": not settings.is_simulation,
             "managed_qwen": settings.manage_qwen, "qwen_loaded": components.model.owned,
             "worker_alive": components.worker_alive,
+            "allow_unqualified_capabilities": settings.allow_unqualified_capabilities,
+            "keyframe_image_backend": settings.keyframe_image_backend,
         }
 
     @app.get("/api/projects")

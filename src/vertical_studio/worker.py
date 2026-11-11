@@ -345,9 +345,13 @@ class Worker:
                      "path": previous_ends[candidate].path, "sha256": previous_ends[candidate].sha256}
                     for candidate in range(1, candidates + 1)
                 ]
-        attempt = self.db.create_attempt(
-            job, "flux-klein-edit-two-reference-v1", seed, generation_payload
+        backend = generation_payload.get("image_edit_backend", "klein")
+        attempt_name = (
+            "qwen-image21-edit-v1"
+            if backend == "qwen_image21"
+            else "flux-klein-edit-two-reference-v1"
         )
+        attempt = self.db.create_attempt(job, attempt_name, seed, generation_payload)
         try:
             with self.gpu.comfy(reset_models=False):
                 result = self.generator.generate_keyframes(
@@ -384,7 +388,15 @@ class Worker:
                     if role == "start"
                     else generation_payload.get("closing_reference_frames", [])
                 )
-                if selected_inputs:
+                if backend == "qwen_image21" and selected_inputs:
+                    method = (
+                        "qwen_image21_edit_reference_anchor"
+                        if role == "start"
+                        else "qwen_image21_edit_reference_transition"
+                    )
+                elif backend == "qwen_image21" and role == "end":
+                    method = "qwen_image21_edit"
+                elif selected_inputs:
                     method = (
                         "flux_klein_edit_reference_anchor"
                         if role == "start"

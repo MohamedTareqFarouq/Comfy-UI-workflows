@@ -67,9 +67,10 @@ router alongside the default Klein capabilities. Select it with `preferred_capab
 in `media_generate_image`; it accepts one primary reference and up to two additional
 conditioning images. The first supplied reference maps to `images.image_1`. It uses the
 workflow's fixed 1024 encoder resolution, follows the primary reference's aspect ratio,
-and emits one image per operation. It is not yet a replacement for the production
-keyframe path, which continues to use Klein until explicitly qualified and exposed as a
-production setting.
+and emits one image per operation. The production keyframe path continues to use Klein
+by default. To opt that worker into Qwen keyframes, set
+`VVS_KEYFRAME_IMAGE_BACKEND=qwen_image21`; the setting is gated by target-machine
+qualification unless `VVS_ALLOW_UNQUALIFIED_CAPABILITIES=true` is also set.
 
 Install the Qwen Image 2.1 ComfyUI model files with:
 

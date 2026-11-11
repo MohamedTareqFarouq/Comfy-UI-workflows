@@ -150,6 +150,8 @@ class QualificationService:
             raise QualificationError(f"ComfyUI is unavailable: {health}")
 
         run_dir = self.settings.data_dir / "qualification" / utc_now().replace(":", "-")
+        run_dir.mkdir(parents=True, exist_ok=True)
+        report["run_dir"] = str(run_dir)
         qualified: list[str] = []
         try:
             common = {
@@ -381,8 +383,20 @@ class QualificationService:
 
     def _save(self, report: dict[str, Any]) -> dict[str, Any]:
         directory = self.settings.data_dir / "qualification"
-        directory.mkdir(parents=True, exist_ok=True)
-        target = directory / "latest.json"
-        target.write_text(json.dumps(report, indent=2))
+        target = (
+            directory / "diagnostics" / "latest.json"
+            if report.get("level") == "diagnostics"
+            else directory / "latest.json"
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
         report["report_path"] = str(target)
+        run_dir = report.get("run_dir")
+        run_report = Path(run_dir) / "report.json" if run_dir else None
+        if run_report is not None:
+            run_report.parent.mkdir(parents=True, exist_ok=True)
+            report["run_report_path"] = str(run_report)
+        serialized = json.dumps(report, indent=2)
+        if run_report is not None:
+            run_report.write_text(serialized)
+        target.write_text(serialized)
         return report

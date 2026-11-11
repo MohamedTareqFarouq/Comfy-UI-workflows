@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -55,6 +56,38 @@ def approve_storyboard_and_references(components, project_id: str):
     )
     assert keyframe_jobs
     return keyframe_jobs
+
+
+def test_keyframe_queue_uses_configured_qwen_backend(components) -> None:
+    project = components.orchestrator.create_project(
+        ProjectCreate(
+            title="Qwen keyframe backend",
+            idea="A station keeper greets a luminous train",
+            duration_seconds=10,
+        )
+    )
+    components.orchestrator.plan_project(project.id)
+    reference_jobs = components.orchestrator.approve_storyboard(
+        project.id, ApprovalRequest(approved=True)
+    )
+    components.worker.run_until_idle(max_jobs=20)
+    components.orchestrator.settings = replace(
+        components.orchestrator.settings, keyframe_image_backend="qwen_image21"
+    )
+
+    jobs = components.orchestrator.approve_canonical_assets(
+        project.id, ApprovalRequest(approved=True)
+    )
+
+    assert reference_jobs
+    assert jobs
+    assert all(job.payload["image_edit_backend"] == "qwen_image21" for job in jobs)
+    components.worker.run_until_idle(max_jobs=20)
+    scene = components.db.list_scenes(project.id)[0]
+    artifacts = components.db.list_artifacts(project.id, scene.id)
+    methods = {artifact.metadata.get("generation_method") for artifact in artifacts}
+    assert "qwen_image21_edit_reference_anchor" in methods
+    assert "qwen_image21_edit_reference_transition" in methods
 
 
 @pytest.mark.parametrize("duration", [10, 20, 30])

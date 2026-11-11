@@ -33,6 +33,8 @@ class Settings:
     qwen_start_timeout: int = 300
     qwen_request_timeout: int = 600
     brave_api_key: str | None = None
+    allow_unqualified_capabilities: bool = False
+    keyframe_image_backend: str = "klein"
 
     @property
     def is_simulation(self) -> bool:
@@ -55,6 +57,9 @@ def load_settings() -> Settings:
         "VVS_DATA_DIR", Path.home() / ".local" / "share" / "vertical-video-studio"
     )
     export_dir = _path_env("VVS_EXPORT_DIR", data_dir / "exports")
+    keyframe_image_backend = os.getenv("VVS_KEYFRAME_IMAGE_BACKEND", "klein").lower()
+    if keyframe_image_backend not in {"klein", "qwen_image21"}:
+        raise ValueError("VVS_KEYFRAME_IMAGE_BACKEND must be 'klein' or 'qwen_image21'")
     settings = Settings(
         data_dir=data_dir,
         db_path=data_dir / "studio.sqlite3",
@@ -79,6 +84,10 @@ def load_settings() -> Settings:
         qwen_start_timeout=int(os.getenv("VVS_QWEN_START_TIMEOUT", "300")),
         qwen_request_timeout=int(os.getenv("VVS_QWEN_REQUEST_TIMEOUT", "600")),
         brave_api_key=os.getenv("VVS_BRAVE_API_KEY") or None,
+        allow_unqualified_capabilities=os.getenv(
+            "VVS_ALLOW_UNQUALIFIED_CAPABILITIES", "false"
+        ).lower() in {"1", "true", "yes", "on"},
+        keyframe_image_backend=keyframe_image_backend,
     )
     settings.ensure_directories()
     return settings

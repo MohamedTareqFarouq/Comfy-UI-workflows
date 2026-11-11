@@ -119,6 +119,15 @@ service and its asynchronous queue remain alive independently of OpenCode.
    the first `ready` role task and persist each typed handoff with
    `production_update_task`.
 
+OpenCode can explicitly select Qwen Image 2.1 for a direct image operation by
+setting `preferred_capability` to `qwen_image21.multi_reference.v1` in
+`media_generate_image`. Supply one to three imported image artifact IDs; the first
+is the primary edit image. For production keyframe jobs created by the studio worker,
+`VVS_KEYFRAME_IMAGE_BACKEND=qwen_image21` selects Qwen globally for that server. This
+setting remains gated by qualification unless
+`VVS_ALLOW_UNQUALIFIED_CAPABILITIES=true` is enabled. That override permits testing but
+does not mark the capability qualified, and generated artifacts record its use.
+
 Every mutating generation, retry, render, import, and session-start request uses
 an idempotency key. Reusing a key with different inputs is rejected.
 
