@@ -10,7 +10,8 @@ Python 3.10, so it requires the Python 3.11 workaround below.
 ssh -p VAST_PORT root@VAST_IP
 
 cd /tmp
-git clone -b codex/capability-router-vast-ready YOUR_REPOSITORY_URL vertical-bootstrap
+git clone -b codex/capability-router-vast-ready \
+  https://github.com/MohamedTareqFarouq/Comfy-UI-workflows.git vertical-bootstrap
 cd vertical-bootstrap
 ```
 
@@ -68,8 +69,8 @@ its own separate Python 3.10 environment.
 export VVS_APP_DIR=/tmp/vertical-bootstrap
 export VVS_INSTALL_ROOT=/opt/vertical-media
 export VVS_BRANCH=codex/capability-router-vast-ready
-export VVS_PYTHON=python3.11
-export PYTHON_BIN=python3.11
+export VVS_PYTHON="$(command -v python3.11 || command -v python3)"
+export PYTHON_BIN="$VVS_PYTHON"
 
 ./packaging/vastai/setup-ubuntu.sh
 ```
@@ -100,21 +101,60 @@ Start the services in separate SSH terminals:
 /opt/vertical-media/start-opencode.sh
 ```
 
-Before asking OpenCode to generate media, qualify the registered capability
-adapters directly against ComfyUI:
+Keep the installer-created app directory consistent: with the settings above it
+is `/tmp/vertical-bootstrap`. Run repository tests and static preflight there:
 
 ```bash
-cd /opt/vertical-media/vertical-video-studio
 source /opt/vertical-media/env
+cd /tmp/vertical-bootstrap
+./run-tests.sh
+./scripts/real-mode-preflight.sh /opt/vertical-media/ComfyUI
+```
+
+After ComfyUI is listening on `127.0.0.1:8188`, run diagnostics (no generation),
+then the explicitly confirmed real smoke test:
+
+```bash
+VVS_EXECUTION_MODE=real ./scripts/qualify.sh diagnostics
 ./scripts/qualify.sh smoke
 ```
 
-This test does not use the OpenCode agent. It exercises Flux T2I, Flux
-one-through-four-reference generation, Wan I2V, and Wan FLF2V through the same
-adapter methods exposed by MCP. Successful capability IDs are saved in
-`/opt/vertical-media/data/qualification/latest.json`; real-mode MCP will expose
-only those qualified capabilities as executable. The smoke run performs real
-GPU generation and therefore takes time and consumes compute.
+The smoke run does not use the OpenCode agent. It exercises Flux T2I, Klein
+one-through-four-reference generation, Qwen Image 2.1 editing, Wan I2V, and Wan
+FLF2V through the same adapters exposed by MCP. It performs real GPU generation
+and consumes compute. The latest result is saved to
+`/opt/vertical-media/data/qualification/latest.json`; an immutable report and
+generated smoke artifacts are saved under the timestamped directory named in
+that report. Only capabilities recorded as qualified are reported as qualified
+by real-mode MCP. Technical reference analysis is separately available without
+GPU qualification; Qwen visual QA remains distinct from technical QA.
+
+Only after reviewing the smoke result, change `VVS_EXECUTION_MODE` from
+`simulation` to `real` in `/opt/vertical-media/env`, then restart OpenCode so its
+MCP server reads the qualified report and real-mode settings. Keep
+`VVS_ALLOW_UNQUALIFIED_CAPABILITIES` disabled for normal production use.
+
+To open the studio/dashboard from your local computer, run the app in another
+SSH terminal after the mode switch:
+
+```bash
+source /opt/vertical-media/env
+cd /tmp/vertical-bootstrap
+./start.sh --host 127.0.0.1 --port 8765
+```
+
+Create an SSH tunnel from your local computer:
+
+```bash
+ssh -N -p VAST_PORT \
+  -L 8765:127.0.0.1:8765 \
+  -L 8188:127.0.0.1:8188 \
+  root@VAST_IP
+```
+
+Open `http://127.0.0.1:8765/dashboard.html` for the live runtime/capability
+panel and `http://127.0.0.1:8188` for ComfyUI. Keep both services bound to
+localhost; use SSH forwarding rather than exposing their ports publicly.
 
 If OpenCode cannot start the MCP server, ensure `opencode.json` points to:
 
@@ -122,17 +162,10 @@ If OpenCode cannot start the MCP server, ensure `opencode.json` points to:
 /tmp/vertical-bootstrap/.venv/bin/python
 ```
 
-## 6. Access ComfyUI
+## 6. Verify the Klein encoder
 
-From the local computer:
-
-```bash
-ssh -N -p VAST_PORT \
-  -L 8188:127.0.0.1:8188 \
-  root@VAST_IP
-```
-
-Open <http://localhost:8188>.
+Use the ComfyUI tunnel opened above. For Flux.2 Klein generation, the workflow's
+`CLIPLoader` must use:
 
 For Flux.2 Klein generation, the workflow's `CLIPLoader` must use:
 
