@@ -63,6 +63,17 @@ class Capability(BaseModel):
     limitations: list[str] = Field(default_factory=list)
 
 
+class ProductionControlMode(StrEnum):
+    HITL = "HITL"
+    AUTOPILOT = "Autopilot"
+
+
+class ProductionGoalMode(StrEnum):
+    EXACT_REPLICA = "exact_replica"
+    ADAPTATION = "adaptation"
+    CREATIVE = "creative"
+
+
 class ArtifactRef(BaseModel):
     artifact_id: str = Field(description="ID returned by media_import_reference or another artifact-producing tool.")
     role: ReferenceRole = Field(description="How this image is used. Video requires start_frame and may include end_frame.")
@@ -146,6 +157,9 @@ class ProductionStartRequest(BaseModel):
     output_format: str = Field(default="mp4", description="Requested final container format; currently use mp4.")
     style_requirements: list[str] = Field(default_factory=list, description="Optional visual style constraints.")
     continuity_requirements: list[str] = Field(default_factory=list, description="Optional requirements for consistent characters, props, or locations.")
+    control_mode: ProductionControlMode = Field(default=ProductionControlMode.HITL, description="HITL pauses at expensive gates; Autopilot may auto-advance only when acceptance criteria are satisfied.")
+    goal_mode: ProductionGoalMode = Field(default=ProductionGoalMode.ADAPTATION, description="Whether the task is exact replica, adaptation, or a creative brief. Exact replica requires stronger visual evidence and stricter thresholds.")
+    reference_analysis_required: bool = Field(default=True, description="If a reference exists, the system must produce an evidence-based analysis pass before storyboards or video are approved.")
     approval_policy: ApprovalPolicy = Field(default_factory=ApprovalPolicy, description="When the service must wait for human approval before expensive work.")
     budgets: ProductionBudgets = Field(default_factory=ProductionBudgets, description="Limits for generation counts, retries, duration, and storage.")
     preferred_capabilities: list[str] = Field(default_factory=list, description="Optional exact capability IDs from media_list_capabilities.")

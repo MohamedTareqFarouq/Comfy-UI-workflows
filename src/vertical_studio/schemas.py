@@ -571,6 +571,9 @@ class QAReport(BaseModel):
     scores: dict[str, float] = Field(default_factory=dict)
     reasons: list[str] = Field(default_factory=list)
     sampled_frames: list[str] = Field(default_factory=list)
+    goal_mode: str = Field(default="adaptation", max_length=32)
+    calibration_status: str = Field(default="uncalibrated", max_length=32)
+    threshold_required: float | None = Field(default=None)
 
 
 class ApprovalRequest(BaseModel):

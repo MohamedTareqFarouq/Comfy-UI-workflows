@@ -55,6 +55,48 @@ def test_default_production_budget_covers_sixty_second_video() -> None:
     assert budgets.max_generated_video_seconds == 75
 
 
+def test_production_start_records_control_and_goal_modes() -> None:
+    request = ProductionStartRequest(
+        goal="Recreate the exact source shot list",
+        user_prompt="Keep motion, props, and lighting aligned to the reference.",
+        control_mode="HITL",
+        goal_mode="exact_replica",
+        idempotency_key="production-mode-0001",
+    )
+    assert request.control_mode == "HITL"
+    assert request.goal_mode == "exact_replica"
+
+
+def test_video_generation_requires_reference_analysis_and_approved_anchor(headless, tmp_path: Path) -> None:
+    image = tmp_path / "anchor.png"
+    run_ffmpeg(["-f", "lavfi", "-i", "color=c=blue:s=270x480:d=0.1", "-frames:v", "1", str(image)])
+    imported = headless.import_reference(str(image), "start_frame", "import-gate-0001")
+    with headless.store.connect() as connection:
+        connection.execute("UPDATE media_artifacts SET disposition='approved' WHERE id=?", (imported["id"],))
+
+    session = ProductionService(headless).start(ProductionStartRequest(
+        goal="Exact recreation gate",
+        user_prompt="Recreate the reference faithfully.",
+        reference_artifact_ids=[imported["id"]],
+        reference_analysis_required=True,
+        control_mode="HITL",
+        goal_mode="exact_replica",
+        idempotency_key="production-gate-0001",
+    ))
+
+    with pytest.raises(ValueError, match="reference analysis is required"):
+        headless.generate_video(VideoGenerationRequest(
+            prompt="subtle motion from the anchor",
+            references=[ArtifactRef(artifact_id=imported["id"], role="start_frame")],
+            width=270,
+            height=480,
+            frames=16,
+            fps=8,
+            production_session_id=session["id"],
+            idempotency_key="video-gate-0001",
+        ))
+
+
 def test_real_comfy_gpu_ownership_allows_no_qwen_gateway() -> None:
     class Generator:
         def __init__(self) -> None:

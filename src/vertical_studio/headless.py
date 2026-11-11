@@ -460,6 +460,24 @@ class HeadlessMediaService:
                 raise ValueError("production session is paused or stopped")
             if session["generation_paused"] and capability.resource_class.startswith("gpu_"):
                 raise ValueError("generation is paused for this production session")
+            session_request = _loads(session["request_json"], {})
+            if capability.media_type == MediaType.VIDEO:
+                if bool(session_request.get("reference_analysis_required", False)):
+                    analysis_check = connection.execute(
+                        "SELECT COUNT(*) FROM media_operations WHERE production_session_id=? AND capability_id=? AND state='succeeded'",
+                        (session_id, "qwen.reference_analysis.v1"),
+                    ).fetchone()[0]
+                    if analysis_check == 0:
+                        raise ValueError("reference analysis is required before video generation; complete the evidence pass first")
+                for item in request.get("references", []):
+                    artifact_id = item.get("artifact_id")
+                    if not artifact_id:
+                        continue
+                    artifact = self.store.artifact(artifact_id)
+                    if artifact["disposition"] not in {"approved", "canonical"}:
+                        raise ValueError(
+                            f"video generation requires approved anchors; artifact {artifact_id} is not approved"
+                        )
             budgets = _loads(session["budgets_json"], {})
             usage = _loads(session["usage_json"], {})
             if capability.media_type == MediaType.IMAGE:
@@ -602,14 +620,20 @@ class ProductionService:
             "Do not repeat an unchanged request after the same failure.",
         ]
         specific = {
-            "controller": ["Inspect the situation, skip unnecessary stages, and create only the smallest sufficient next task."],
-            "analyze": ["Extract typed evidence and recommend, but do not promote, canonical assets."],
-            "plan": ["Define beats, shots, continuity facts, requirements, and acceptance criteria."],
-            "asset": ["Propose canonical identity, environment, and prop assets and stop dependents if rejected."],
-            "image": ["Use T2I for no reference, single-reference for one dominant input, and multi-reference to combine inputs."],
-            "video": ["Prefer I2V from an approved start; use FLF2V only when the destination state matters."],
-            "qa": ["Evaluate declared requirements and recommend a materially changed retry or stop."],
-            "repair": ["Diagnose the failed requirement, preserve unaffected artifacts, and repair the smallest dependency."],
+            "controller": [
+                "Inspect the situation, skip unnecessary stages, and create only the smallest sufficient next task.",
+                "When a reference exists, require an evidence-based analysis pass before storyboard or video review can be approved.",
+            ],
+            "analyze": [
+                "Extract typed evidence and recommend, but do not promote, canonical assets.",
+                "Ground every continuity, style, and identity claim in reference evidence before it is used for a plan or approval gate.",
+            ],
+            "plan": ["Define beats, shots, continuity facts, requirements, and acceptance criteria.", "Compare each scene to the reference evidence and flag identity, direction, composition, prop, and style drift before approval."],
+            "asset": ["Propose canonical identity, environment, and prop assets and stop dependents if rejected.", "Use the reference evidence pack as the acceptance baseline for any canonical anchor."],
+            "image": ["Use T2I for no reference, single-reference for one dominant input, and multi-reference to combine inputs.", "Do not queue expensive video generation until the required storyboard and anchors are accepted."],
+            "video": ["Prefer I2V from an approved start; use FLF2V only when the destination state matters.", "Require accepted start/end anchors and continuity checks before a new video is generated."],
+            "qa": ["Evaluate declared requirements and recommend a materially changed retry or stop.", "For exact replica, require evidence-backed threshold checks and route uncalibrated or low-scoring outputs to human review."],
+            "repair": ["Diagnose the failed requirement, preserve unaffected artifacts, and repair the smallest dependency.", "Use the failed dimensions and evidence references to repair only the cause of the drift."],
             "render": ["Select approved clips explicitly and render in the declared order."],
             "finish": ["Confirm the requested deliverable exists and summarize its artifact ID."],
         }
