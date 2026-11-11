@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#10131a">
+  <title>Agent Dashboard - Vertical Video Studio</title>
+  <link rel="stylesheet" href="/styles.css?v=dashboard-1">
+  <link rel="stylesheet" href="/dashboard.css?v=dashboard-1">
+</head>
+<body>
+  <header>
+    <div>
+      <span class="eyebrow">AGENT OPERATIONS</span>
+      <h1>Production dashboard</h1>
+    </div>
+    <div class="header-actions">
+      <a href="/">Studio</a>
+      <a href="/observability.html">Observability</a>
+      <div id="runtime" class="status">Connecting...</div>
+    </div>
+  </header>
+
+  <main class="dashboard-shell">
+    <section class="overview-grid" id="overview-grid"></section>
+
+    <section class="dashboard-grid">
+      <aside class="dashboard-side">
+        <div class="panel-header">
+          <h2>Current queue</h2>
+          <button id="dashboard-refresh" class="small-button">Refresh</button>
+        </div>
+        <div id="queue-panel" class="stack-panel"></div>
+      </aside>
+
+      <section class="dashboard-main">
+        <div class="panel-header">
+          <h2>Active project board</h2>
+          <span id="dashboard-status" class="status">Live</span>
+        </div>
+        <div id="dashboard-content" class="card-grid"></div>
+      </section>
+    </section>
+  </main>
+
+  <script src="/dashboard.js?v=dashboard-1" defer></script>
+</body>
+</html>
