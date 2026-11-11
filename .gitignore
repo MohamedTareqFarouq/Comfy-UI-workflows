@@ -24,3 +24,4 @@ wheelhouse/
 *.log
 !workflows/workflow_maps.json
 workflows/qualification_payloads.json
+!workflows/qwen_image21_edit_api.json
