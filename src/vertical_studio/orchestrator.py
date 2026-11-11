@@ -1237,7 +1237,20 @@ class Orchestrator:
     def approve_scene(self, scene_id: str, request: ApprovalRequest) -> Scene:
         scene = self.db.get_scene(scene_id)
         if scene.state not in {SceneState.VIDEO_READY, SceneState.QA_FAILED}: raise ValueError("video not ready")
-        self.db.record_approval(scene.project_id, "video", request.approved, request.notes, scene.id)
+        reports = [
+            item["report"] for item in self.db.list_qa_reports(scene.project_id)
+            if item["scene_id"] == scene.id
+        ]
+        latest_report = reports[-1] if reports else {}
+        qa_failed = scene.state == SceneState.QA_FAILED or not latest_report.get("advisory_pass", True)
+        if request.approved and qa_failed and len(request.override_reason.strip()) < 10:
+            raise ValueError(
+                "QA failure requires a specific override_reason of at least 10 characters"
+            )
+        notes = request.notes
+        if request.approved and qa_failed:
+            notes = f"{notes}\nQA override: {request.override_reason.strip()}".strip()
+        self.db.record_approval(scene.project_id, "video", request.approved, notes, scene.id)
         if request.approved:
             scene = self.db.transition_scene(scene.id, SceneState.APPROVED, "user approval")
             self.reconcile_project_state(scene.project_id)

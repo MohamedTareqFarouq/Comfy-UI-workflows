@@ -233,17 +233,26 @@ reference instead of a text-only idea. The initial implementation:
 
 1. Stores and hashes the immutable source in managed project storage.
 2. Validates it with FFprobe and derives the project duration.
-3. Extracts eight chronological evidence frames.
+3. Uses FFmpeg scene-change candidates to select shot-aware evidence frames and
+   records cut timestamps and shot ranges. Optional OpenCV Farneback flow,
+   scikit-image SSIM, and Tesseract OCR add motion, adjacent-frame similarity,
+   and visible-text evidence when installed.
 4. Uses Qwen to produce a typed visual-style, motion-style, canonical-asset and
-   scene blueprint. Simulation mode produces the same deterministic contract.
+   scene blueprint grounded in those measurements. Simulation mode produces
+   the same deterministic contract.
 5. Presents the source, evidence and blueprint for approval.
 6. Converts the approved blueprint into the existing storyboard and canonical
    asset pipeline.
 
-This first slice accepts local file uploads. Direct remote video URLs, shot-aware
-sampling, editable entity consolidation and source-frame-conditioned canonical
-asset generation remain follow-up work. The Wan stage still interprets textual
-motion descriptions; reference mode is a generative remake, not an exact clone.
+The optional analysis packages can be installed with `pip install -e '.[analysis]'`;
+Tesseract OCR also requires the system `tesseract` executable. Scene-change
+candidates and similarity/motion measurements are review evidence, not ground
+truth. The current UI displays the candidate shot map but does not support
+direct boundary editing; reject or re-run analysis when it materially misreads
+the source. Exact-replica QA remains human-reviewed until a visual evaluator is
+calibrated against a human-reviewed dataset. The Wan stage still interprets
+textual motion descriptions; reference mode is a generative remake, not an
+exact clone.
 
 
 ## Backup and migration

@@ -138,6 +138,37 @@ def test_restart_reconciles_stale_project_milestones(components) -> None:
         restarted.stop()
 
 
+def test_exact_replica_goal_persists_and_failed_qa_requires_reasoned_override(components) -> None:
+    project = components.orchestrator.create_project(
+        ProjectCreate(
+            idea="Recreate this source faithfully",
+            duration_seconds=10,
+            goal_mode="exact_replica",
+        )
+    )
+    assert components.db.get_project(project.id).goal_mode == "exact_replica"
+    components.orchestrator.plan_project(project.id)
+    scene = components.db.list_scenes(project.id)[0]
+    with components.db.connect() as connection:
+        connection.execute("UPDATE scenes SET state='qa_failed' WHERE id=?", (scene.id,))
+
+    with pytest.raises(ValueError, match="override_reason"):
+        components.orchestrator.approve_scene(
+            scene.id, ApprovalRequest(approved=True)
+        )
+
+    approved = components.orchestrator.approve_scene(
+        scene.id,
+        ApprovalRequest(
+            approved=True,
+            override_reason="Human inspected the frame and accepts the known style deviation.",
+        ),
+    )
+    assert approved.state == SceneState.APPROVED
+    approval = components.db.list_approvals(project.id)[-1]
+    assert "QA override:" in approval["notes"]
+
+
 def test_canonical_reference_gate_survives_restart(components) -> None:
     project = components.orchestrator.create_project(
         ProjectCreate(idea="An elderly diner is served by the same waiter", duration_seconds=10)

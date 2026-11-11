@@ -160,6 +160,10 @@ def test_reference_video_becomes_reviewable_storyboard(
         )
         assert len(blueprint["scenes"]) >= 3
         assert detail["reference_source"]["artifact_id"]
+        technical_evidence = detail["reference_analysis"]["trace"]["technical_evidence"]
+        assert technical_evidence["shot_count"] == 1
+        assert len(technical_evidence["sample_frames"]) == 8
+        assert technical_evidence["tools"]["ffmpeg_scene_detection"] is True
         evidence = [
             artifact for artifact in detail["artifacts"]
             if artifact["metadata"].get("role") == "reference_evidence"

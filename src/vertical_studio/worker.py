@@ -9,7 +9,7 @@ from .schemas import ArtifactKind, Job, JobKind, JobState, ProjectState, SceneSt
 from .services.comfy import GenerationError, Generator
 from .services.gpu import GpuCoordinator
 from .services.model_gateway import ModelUnavailable
-from .services.media import extract_frames, probe_media, sha256_file
+from .services.media import analyze_reference_video, extract_frames, probe_media, sha256_file
 from .services.qa import QualityService
 from .services.reference import ReferenceAnalyzer
 from .services.renderer import Renderer
@@ -106,11 +106,12 @@ class Worker:
             self.settings.projects_dir / job.project_id / "reference" / "evidence"
             / f"analysis-{round_number}"
         )
-        frames = extract_frames(
+        evidence = analyze_reference_video(
             Path(source["path"]),
             evidence_dir,
-            count=int(job.payload.get("frame_count", 8)),
+            sample_count=int(job.payload.get("frame_count", 8)),
         )
+        frames = [Path(item["path"]) for item in evidence["sample_frames"]]
         if self.qa.model is None:
             raise GenerationError(
                 "model_unavailable", "reference analysis requires a configured model"
@@ -121,12 +122,14 @@ class Worker:
         try:
             if self.settings.is_simulation:
                 blueprint, trace = analyzer.analyze(
-                    project, frames, source_name=source["original_name"]
+                    project, frames, source_name=source["original_name"],
+                    technical_evidence=evidence,
                 )
             else:
                 with self.gpu.qwen():
                     blueprint, trace = analyzer.analyze(
-                        project, frames, source_name=source["original_name"]
+                        project, frames, source_name=source["original_name"],
+                        technical_evidence=evidence,
                     )
         except ModelUnavailable as exc:
             raise GenerationError(
@@ -138,6 +141,7 @@ class Worker:
         blueprint.as_storyboard()
         evidence_ids = []
         for index, frame in enumerate(frames, 1):
+            timestamp = evidence["sample_frames"][index - 1]["timestamp_seconds"]
             artifact = self.db.add_artifact(
                 job.project_id,
                 ArtifactKind.IMAGE,
@@ -149,6 +153,7 @@ class Worker:
                     "analysis_round": round_number,
                     "order": index,
                     "sample_count": len(frames),
+                    "timestamp_seconds": timestamp,
                 },
             )
             evidence_ids.append(artifact.id)
@@ -479,6 +484,7 @@ class Worker:
                 if artifact_id
             ]
             review_args = {
+                "goal_mode": self.db.get_project(job.project_id).goal_mode,
                 "context": {
                     "scene": scene.spec.model_dump(),
                     "character_bible": {
@@ -512,7 +518,12 @@ class Worker:
             self.db.select_artifacts(job.scene_id, video_id=artifact.id)
             self.db.clear_continuity_stale(job.scene_id)
             self.db.finish_attempt(attempt, "succeeded")
-            self.db.transition_scene(job.scene_id, SceneState.VIDEO_READY if report.technical_pass else SceneState.QA_FAILED)
+            self.db.transition_scene(
+                job.scene_id,
+                SceneState.VIDEO_READY
+                if report.technical_pass and report.advisory_pass
+                else SceneState.QA_FAILED,
+            )
         except Exception as exc:
             self.db.finish_attempt(attempt, "failed", {"message": str(exc)}); raise
 

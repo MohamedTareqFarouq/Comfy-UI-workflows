@@ -488,6 +488,7 @@ function renderDetail(){
       <div class="qa ${qaReport.report.technical_pass?"pass":"fail"}">
         <b>QA: ${qaReport.report.technical_pass?"technical pass":"technical failure"}</b>
         <span>${qaReport.report.advisory_pass?"visual review passed":"visual review needs attention"}</span>
+        <small>${esc(qaReport.report.goal_mode||project.goal_mode)} · ${esc(qaReport.report.evaluator||"unknown evaluator")} · calibration ${esc(qaReport.report.calibration_status||"unknown")}</small>
         ${(qaReport.report.reasons||[]).map(reason=>`<small>${esc(reason)}</small>`).join("")}
       </div>
     `:"";
@@ -553,6 +554,9 @@ function renderDetail(){
   }).join("");
 
   const blueprint=reference_analysis?.blueprint;
+  const analysisEvidence=reference_analysis?.trace?.technical_evidence||{};
+  const analysisTools=analysisEvidence.tools||{};
+  const detectedText=analysisEvidence.detected_text||[];
   const evidenceIds=reference_analysis?.trace?.evidence_artifact_ids;
   const evidenceFrames=Array.isArray(evidenceIds)
     ?evidenceIds.map(id=>artifacts.find(artifact=>artifact.id===id)).filter(Boolean)
@@ -581,6 +585,20 @@ function renderDetail(){
           <p>${blueprint.canonical_assets.length} canonical assets · ${blueprint.scenes.length} scenes</p>
           <small>${esc((blueprint.ambiguities||[]).join(" · ")||"No unresolved ambiguities")}</small></section>
         </div>
+        ${analysisEvidence.tools?`<div class="history-columns">
+          <section><h3>Measured source analysis</h3>
+            <p>${analysisEvidence.shot_count||0} candidate shots · cuts at ${esc((analysisEvidence.cut_timestamps_seconds||[]).map(value=>`${Number(value).toFixed(2)}s`).join(", ")||"none detected")}</p>
+            <small>${(analysisEvidence.shot_ranges||[]).map((shot,index)=>`Shot ${index+1}: ${Number(shot.start_seconds).toFixed(2)}–${Number(shot.end_seconds).toFixed(2)}s`).map(esc).join(" · ")}</small>
+            <small>Candidate boundaries require review against the source.</small>
+          </section>
+          <section><h3>Analysis tools</h3>
+            <p>${Object.entries(analysisTools).map(([name,available])=>`${esc(name.replaceAll("_"," "))}: ${available?"available":"not installed"}`).join(" · ")}</p>
+            <small>SSIM: ${esc((analysisEvidence.similarity_summary?.ssim_by_sample_pair||[]).map(value=>value==null?"n/a":value).join(", ")||"unavailable")} · Flow: ${esc((analysisEvidence.motion_summary?.mean_magnitude_by_pair||[]).map(value=>value==null?"n/a":value).join(", ")||"unavailable")}</small>
+          </section>
+          <section><h3>Detected text</h3>
+            <p>${detectedText.length?detectedText.map(item=>`${Number(item.timestamp_seconds).toFixed(2)}s: ${esc(item.text)}`).join(" · "):"No text detected or OCR unavailable."}</p>
+          </section>
+        </div>`:""}
         ${evidenceFrames.length?`<div class="reference-evidence-heading">
           <h3>Evidence frames</h3><span>${evidenceFrames.length} sampled frames · open to inspect</span>
         </div>
@@ -588,7 +606,7 @@ function renderDetail(){
           <a class="media reference-evidence-frame" href="/api/artifacts/${artifact.id}/content"
             target="_blank" rel="noopener noreferrer" aria-label="Open evidence frame ${index+1}">
             <img loading="lazy" src="/api/artifacts/${artifact.id}/content" alt="Evidence frame ${index+1}">
-            <small>Frame ${index+1}</small></a>`).join("")}</div>`:""}
+            <small>${artifact.metadata?.timestamp_seconds!=null?`${Number(artifact.metadata.timestamp_seconds).toFixed(2)}s`:`Frame ${index+1}`}</small></a>`).join("")}</div>`:""}
       `:"<p>Upload complete. Run analysis to extract style, characters, environments and movement.</p>"}
     </section>
   `:"";
@@ -668,7 +686,17 @@ function bindActions(){
   document.querySelectorAll("[data-action]").forEach(button=>button.onclick=()=>act(button.dataset.action));
   document.querySelectorAll("[data-kf]").forEach(button=>button.onclick=()=>approveKeyframes(button));
   document.querySelectorAll("[data-retry-kf]").forEach(button=>button.onclick=()=>openGuidedRetry(button.dataset.retryKf,"keyframe",button));
-  document.querySelectorAll("[data-approve-video]").forEach(button=>button.onclick=()=>post(`/api/scenes/${button.dataset.approveVideo}/approval`,{approved:true,notes:""}));
+  document.querySelectorAll("[data-approve-video]").forEach(button=>button.onclick=async()=>{
+    const scene=state.detail.scenes.find(item=>item.id===button.dataset.approveVideo);
+    const body={approved:true,notes:"",override_reason:""};
+    if(scene?.state==="qa_failed"){
+      const reason=prompt("QA did not pass. Enter a specific reason to override this review.");
+      if(reason===null)return;
+      if(reason.trim().length<10){toast("Provide an override reason of at least 10 characters.");return;}
+      body.override_reason=reason.trim();
+    }
+    await post(`/api/scenes/${button.dataset.approveVideo}/approval`,body);
+  });
   document.querySelectorAll("[data-retry-video]").forEach(button=>button.onclick=()=>openGuidedRetry(button.dataset.retryVideo,"video",button));
   document.querySelectorAll("[data-retry-reference]").forEach(button=>button.onclick=()=>openCanonicalRetry(button.dataset.retryReference,button));
   document.querySelectorAll("[data-edit-scene]").forEach(button=>button.onclick=()=>editScene(button.dataset.editScene));
@@ -1170,6 +1198,11 @@ function uploadReference(projectId,file,onProgress){
 
 q("#source-mode").onchange=event=>{
   const reference=event.target.value==="reference";
+  if(reference&&q('#create-form select[name="goal_mode"]').value==="creative"){
+    q('#create-form select[name="goal_mode"]').value="adaptation";
+  }else if(!reference&&q('#create-form select[name="goal_mode"]').value==="adaptation"){
+    q('#create-form select[name="goal_mode"]').value="creative";
+  }
   q("#reference-file-field").hidden=!reference;
   q("#reference-file-field input").required=reference;
   const idea=q('#create-form textarea[name="idea"]');
@@ -1208,6 +1241,7 @@ q("#create-form").onsubmit=async event=>{
         idea:enteredIdea||(sourceMode==="reference"?"Recreate the reference video":""),
         duration_seconds:Number(form.get("duration_seconds")),
         visual_style:form.get("visual_style"),
+        goal_mode:String(form.get("goal_mode")||"creative"),
         research_required:form.get("research_required")==="on",
         source_mode:sourceMode,
         source_urls:String(form.get("source_urls")||"").split(/\r?\n/).map(value=>value.trim()).filter(Boolean)

@@ -67,6 +67,32 @@ def test_production_start_records_control_and_goal_modes() -> None:
     assert request.goal_mode == "exact_replica"
 
 
+def test_autopilot_defaults_to_autonomous_approvals_and_keeps_hard_gates(headless) -> None:
+    production = ProductionService(headless)
+    session = production.start(ProductionStartRequest(
+        goal="Autopilot test",
+        user_prompt="Proceed only when evidence meets acceptance criteria.",
+        control_mode="Autopilot",
+        idempotency_key="production-autopilot-0001",
+    ))
+
+    assert session["approval_policy"]["preset"] == "autonomous"
+    instructions = session["tasks"][0]["requirements"]["instructions"]
+    assert any("does not bypass reference analysis" in item for item in instructions)
+    assert any("evidence is missing" in item for item in instructions)
+
+    situation = production.create_task(session["id"], ProductionTaskRequest(
+        stage="plan",
+        objective="Plan from source evidence",
+        idempotency_key="autopilot-plan-task-0001",
+    ))
+    task = next(item for item in situation["active_tasks"] if item["role"] == "plan")
+    assert any(
+        "does not bypass reference analysis" in item
+        for item in task["requirements"]["instructions"]
+    )
+
+
 def test_video_generation_requires_reference_analysis_and_approved_anchor(headless, tmp_path: Path) -> None:
     image = tmp_path / "anchor.png"
     run_ffmpeg(["-f", "lavfi", "-i", "color=c=blue:s=270x480:d=0.1", "-frames:v", "1", str(image)])
@@ -94,6 +120,64 @@ def test_video_generation_requires_reference_analysis_and_approved_anchor(headle
             fps=8,
             production_session_id=session["id"],
             idempotency_key="video-gate-0001",
+        ))
+
+
+def test_video_generation_waits_for_created_storyboard_task_approval(headless, tmp_path: Path) -> None:
+    image = tmp_path / "approved-anchor.png"
+    run_ffmpeg(["-f", "lavfi", "-i", "color=c=blue:s=270x480:d=0.1", "-frames:v", "1", str(image)])
+    anchor = headless.import_reference(str(image), "start_frame", "import-plan-gate-0001")
+    with headless.store.connect() as connection:
+        connection.execute(
+            "UPDATE media_artifacts SET disposition='approved', user_notes='human-approved anchor' WHERE id=?",
+            (anchor["id"],),
+        )
+    production = ProductionService(headless)
+    session = production.start(ProductionStartRequest(
+        goal="Create a planned clip",
+        user_prompt="Use an accepted storyboard before generating the clip.",
+        idempotency_key="production-plan-gate-0001",
+    ))
+    plan = production.create_task(session["id"], ProductionTaskRequest(
+        stage="plan",
+        objective="Plan the video shot",
+        idempotency_key="plan-gate-task-0001",
+    ))["active_tasks"][0]
+    production.update_task(session["id"], plan["id"], "completed", {"approved": False}, [])
+
+    with pytest.raises(ValueError, match="storyboard approval is required"):
+        headless.generate_video(VideoGenerationRequest(
+            prompt="subtle movement",
+            references=[ArtifactRef(artifact_id=anchor["id"], role="start_frame")],
+            width=270,
+            height=480,
+            frames=16,
+            fps=8,
+            production_session_id=session["id"],
+            idempotency_key="video-plan-gate-0001",
+        ))
+
+
+def test_video_generation_rejects_unapproved_canonical_reference(headless, tmp_path: Path) -> None:
+    image = tmp_path / "canonical-anchor.png"
+    run_ffmpeg(["-f", "lavfi", "-i", "color=c=blue:s=270x480:d=0.1", "-frames:v", "1", str(image)])
+    anchor = headless.import_reference(str(image), "identity", "import-unapproved-anchor-0001")
+    session = ProductionService(headless).start(ProductionStartRequest(
+        goal="Generate from an accepted identity anchor",
+        user_prompt="Use only approved references.",
+        idempotency_key="production-unapproved-anchor-0001",
+    ))
+
+    with pytest.raises(ValueError, match="requires approved anchors"):
+        headless.generate_video(VideoGenerationRequest(
+            prompt="subtle movement",
+            references=[ArtifactRef(artifact_id=anchor["id"], role="start_frame")],
+            width=270,
+            height=480,
+            frames=16,
+            fps=8,
+            production_session_id=session["id"],
+            idempotency_key="video-unapproved-anchor-0001",
         ))
 
 
@@ -173,6 +257,28 @@ def test_video_modes_require_explicit_boundary_roles(headless, tmp_path: Path) -
             preferred_capability="wan22.flf2v.v1", idempotency_key="video-invalid-0001",
         ))
     assert "requires exactly" in error.value.conflicts[0]
+
+
+def test_standalone_reference_analysis_emits_shot_evidence(headless, tmp_path: Path) -> None:
+    source = tmp_path / "reference.mp4"
+    run_ffmpeg([
+        "-f", "lavfi", "-i", "color=c=blue:s=160x90:r=10:d=1",
+        "-f", "lavfi", "-i", "color=c=red:s=160x90:r=10:d=1",
+        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+        "-map", "[v]", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+    ])
+    imported = headless.import_reference(str(source), "style", "analysis-video-0001")
+    operation = headless.analyze([imported["id"]], "analysis-evidence-0001")
+
+    completed = wait_for(headless, operation["id"])
+
+    assert completed["state"] == "succeeded"
+    report_artifact = headless.store.artifact(completed["result_artifact_ids"][-1])
+    report = json.loads(Path(report_artifact["path"]).read_text())
+    source_report = report["source_analysis"][0]
+    assert source_report["shot_count"] == 2
+    assert source_report["cut_timestamps_seconds"]
+    assert len(source_report["evidence_artifact_ids"]) == 6
 
 
 def test_production_graph_is_model_neutral_and_dependency_driven(headless) -> None:

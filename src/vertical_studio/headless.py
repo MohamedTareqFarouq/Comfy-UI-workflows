@@ -27,7 +27,7 @@ from .headless_schemas import (
 from .schemas import utc_now
 from .services.comfy import ComfyClient, GenerationError
 from .services.gpu import GpuCoordinator
-from .services.media import probe_media, sha256_file
+from .services.media import analyze_reference_video, probe_media, sha256_file
 from .services.mock_comfy import MockComfyClient
 from .services.qa import QualityService
 from .services.renderer import Renderer
@@ -317,16 +317,43 @@ class HeadlessMediaService:
 
     def _execute_analysis(self, operation: dict[str, Any], target: Path) -> list[str]:
         evidence = []
+        source_analysis = []
+        output_artifact_ids = []
         for artifact_id in operation["input_artifact_ids"]:
             artifact = self.store.artifact(artifact_id)
             evidence.append({"artifact_id": artifact_id, "media_type": artifact["media_type"], "metadata": artifact["metadata"]})
+            if artifact["media_type"] == "video":
+                analysis = analyze_reference_video(
+                    Path(artifact["path"]), target / f"evidence-{artifact_id}", sample_count=6
+                )
+                frame_artifact_ids = []
+                for sample in analysis["sample_frames"]:
+                    frame_artifact_id = self._record_generated(
+                        operation,
+                        Path(sample["path"]),
+                        {
+                            "role": "reference_evidence",
+                            "source_artifact_id": artifact_id,
+                            "timestamp_seconds": sample["timestamp_seconds"],
+                        },
+                        "generated",
+                    )
+                    frame_artifact_ids.append(frame_artifact_id)
+                    output_artifact_ids.append(frame_artifact_id)
+                source_analysis.append({
+                    "source_artifact_id": artifact_id,
+                    **analysis,
+                    "evidence_artifact_ids": frame_artifact_ids,
+                })
         report = target / "analysis.json"
         report.write_text(json.dumps({
             "entities": [], "style": {}, "environment": {}, "motion": {}, "camera": {},
             "continuity": {}, "canonical_asset_suggestions": [], "evidence": evidence,
-            "note": "Simulation analysis contract; real Qwen analysis requires explicit model qualification.",
+            "source_analysis": source_analysis,
+            "note": "This report contains measurable media evidence. Use a vision-capable reviewer for semantic identity, action, style, and continuity interpretation; do not treat measurements as fidelity scores.",
         }, indent=2))
-        return [self._record_generated(operation, report, {"analysis": True}, "generated")]
+        report_id = self._record_generated(operation, report, {"analysis": True}, "generated")
+        return [*output_artifact_ids, report_id]
 
     def _execute_evaluation(self, operation: dict[str, Any], target: Path) -> list[str]:
         reports = []
@@ -336,7 +363,10 @@ class HeadlessMediaService:
                 report = {"technical_pass": Path(artifact["path"]).exists(), "advisory_pass": True,
                           "scores": {"accessible": 1.0}, "reasons": [], "retry_recommendation": None}
             else:
-                qa = self.qa.inspect_video(Path(artifact["path"]), target / artifact_id)
+                qa = self.qa.inspect_video(
+                    Path(artifact["path"]), target / artifact_id,
+                    goal_mode=request.get("goal_mode", "adaptation"),
+                )
                 report = {**qa.model_dump(), "retry_recommendation": None if qa.technical_pass else "retry_with_changed_settings"}
             reports.append({"artifact_id": artifact_id, **report})
             with self.store.connect() as connection:
@@ -462,19 +492,29 @@ class HeadlessMediaService:
                 raise ValueError("generation is paused for this production session")
             session_request = _loads(session["request_json"], {})
             if capability.media_type == MediaType.VIDEO:
-                if bool(session_request.get("reference_analysis_required", False)):
-                    analysis_check = connection.execute(
-                        "SELECT COUNT(*) FROM media_operations WHERE production_session_id=? AND capability_id=? AND state='succeeded'",
+                reference_ids = set(session_request.get("reference_artifact_ids", []))
+                if reference_ids and bool(session_request.get("reference_analysis_required", False)):
+                    analyses = connection.execute(
+                        "SELECT input_artifact_ids_json FROM media_operations WHERE production_session_id=? AND capability_id=? AND state='succeeded'",
                         (session_id, "qwen.reference_analysis.v1"),
-                    ).fetchone()[0]
-                    if analysis_check == 0:
+                    ).fetchall()
+                    if not any(reference_ids <= set(_loads(row["input_artifact_ids_json"], [])) for row in analyses):
                         raise ValueError("reference analysis is required before video generation; complete the evidence pass first")
+                plan_tasks = connection.execute(
+                    "SELECT status,handoff_json FROM production_tasks WHERE session_id=? AND role='plan'",
+                    (session_id,),
+                ).fetchall()
+                if plan_tasks and not any(
+                    row["status"] == "completed" and _loads(row["handoff_json"], {}).get("approved") is True
+                    for row in plan_tasks
+                ):
+                    raise ValueError("storyboard approval is required before video generation")
                 for item in request.get("references", []):
                     artifact_id = item.get("artifact_id")
                     if not artifact_id:
                         continue
                     artifact = self.store.artifact(artifact_id)
-                    if artifact["disposition"] not in {"approved", "canonical"}:
+                    if artifact["disposition"] != "approved":
                         raise ValueError(
                             f"video generation requires approved anchors; artifact {artifact_id} is not approved"
                         )
@@ -601,7 +641,7 @@ class ProductionService:
                 "goal": request.goal, "user_prompt": request.user_prompt,
                 "objective": "Inspect the request and choose the smallest sufficient next stage.",
                 "acceptance_criteria": ["A concrete next stage is selected or the request is complete."],
-                "instructions": self._instructions("controller"),
+                "instructions": self._instructions("controller", request.control_mode.value),
                 "idempotency_key": f"controller-{request.idempotency_key}",
             }
             connection.execute(
@@ -613,12 +653,24 @@ class ProductionService:
         return self.inspect(session_id)
 
     @staticmethod
-    def _instructions(role: str) -> list[str]:
+    def _instructions(role: str, control_mode: str = "HITL") -> list[str]:
         common = [
             "Use only registered atomic media tools; never submit workflow JSON or node patches.",
             "Generated outputs do not become canonical without explicit user approval.",
             "Do not repeat an unchanged request after the same failure.",
         ]
+        mode_rules = (
+            [
+                "Control mode is HITL: pause at storyboard, canonical-asset, and keyframe gates and wait for explicit user approval before dependent costly work.",
+                "Never represent an agent recommendation or task completion as user approval.",
+            ]
+            if control_mode == "HITL"
+            else [
+                "Control mode is Autopilot: advance without routine pauses only when every stated acceptance criterion is verified by evidence.",
+                "If acceptance is subjective, evidence is missing, QA fails, or a hard gate is uncertain, pause and request user direction instead of self-approving.",
+                "Autopilot does not bypass reference analysis, accepted storyboard/anchors, QA rejection, capability readiness, or budgets.",
+            ]
+        )
         specific = {
             "controller": [
                 "Inspect the situation, skip unnecessary stages, and create only the smallest sufficient next task.",
@@ -637,7 +689,7 @@ class ProductionService:
             "render": ["Select approved clips explicitly and render in the declared order."],
             "finish": ["Confirm the requested deliverable exists and summarize its artifact ID."],
         }
-        return common + specific[role]
+        return common + mode_rules + specific[role]
 
     @staticmethod
     def _event(connection: sqlite3.Connection, session_id: str, event_type: str, data: dict[str, Any]) -> None:
@@ -691,8 +743,12 @@ class ProductionService:
         for artifact_id in request.input_artifact_ids:
             self.store.artifact(artifact_id)
         with self.store.connect() as connection:
-            if connection.execute("SELECT id FROM production_sessions WHERE id=?", (session_id,)).fetchone() is None:
+            session = connection.execute(
+                "SELECT request_json FROM production_sessions WHERE id=?", (session_id,)
+            ).fetchone()
+            if session is None:
                 raise KeyError("production session not found")
+            control_mode = _loads(session["request_json"], {}).get("control_mode", "HITL")
             existing = connection.execute(
                 "SELECT id FROM production_tasks WHERE session_id=? AND json_extract(requirements_json, '$.idempotency_key')=?",
                 (session_id, request.idempotency_key),
@@ -710,7 +766,7 @@ class ProductionService:
             requirements = {
                 "objective": request.objective, "acceptance_criteria": request.acceptance_criteria,
                 "input_artifact_ids": request.input_artifact_ids,
-                "instructions": self._instructions(request.stage), "idempotency_key": request.idempotency_key,
+                "instructions": self._instructions(request.stage, control_mode), "idempotency_key": request.idempotency_key,
             }
             connection.execute(
                 "INSERT INTO production_tasks VALUES(?,?,?,?,?,?,?,?,?,?,?)",

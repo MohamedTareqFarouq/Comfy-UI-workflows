@@ -120,6 +120,7 @@ class VideoGenerationRequest(BaseModel):
 
 class EvaluationRequest(BaseModel):
     artifact_ids: list[str] = Field(min_length=1, description="One or more existing artifact IDs to evaluate.")
+    goal_mode: ProductionGoalMode = Field(default=ProductionGoalMode.ADAPTATION, description="Goal-specific visual acceptance criteria; exact_replica requires human review until a calibrated evaluator is available.")
     requirements: dict[str, Any] = Field(default_factory=dict, description="Optional machine-checkable requirements, such as expected width, height, or duration.")
     use_visual_critique: bool = Field(default=False, description="Whether to request visual critique when that capability is available.")
     production_session_id: str | None = Field(default=None, description="Optional ID returned by production_start.")
@@ -164,6 +165,15 @@ class ProductionStartRequest(BaseModel):
     budgets: ProductionBudgets = Field(default_factory=ProductionBudgets, description="Limits for generation counts, retries, duration, and storage.")
     preferred_capabilities: list[str] = Field(default_factory=list, description="Optional exact capability IDs from media_list_capabilities.")
     idempotency_key: str = Field(min_length=8, max_length=200, description="Unique key for creating this session; reuse only to safely repeat the same start request.")
+
+    @model_validator(mode="after")
+    def default_autopilot_approval_policy(self) -> "ProductionStartRequest":
+        if (
+            self.control_mode == ProductionControlMode.AUTOPILOT
+            and "approval_policy" not in self.model_fields_set
+        ):
+            self.approval_policy = ApprovalPolicy(preset="autonomous")
+        return self
 
 
 class ProductionTaskRequest(BaseModel):

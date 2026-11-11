@@ -29,13 +29,16 @@ class ReferenceAnalyzer:
         frames: list[Path],
         *,
         source_name: str,
+        technical_evidence: dict | None = None,
     ) -> tuple[ReferenceBlueprint, dict]:
+        evidence = technical_evidence or {}
         if self.simulation:
             blueprint = self._simulation_blueprint(project, source_name, frames)
             return blueprint, {
                 "model": "simulation-reference-analyzer",
                 "source_name": source_name,
                 "evidence_frames": [str(path) for path in frames],
+                "technical_evidence": evidence,
                 "parsed_response": blueprint.model_dump(mode="json"),
             }
 
@@ -72,7 +75,9 @@ class ReferenceAnalyzer:
             prompt=(
                 f"Source: {source_name}. Target duration: {project.duration_seconds} seconds. "
                 f"Project request: {project.idea}. Requested project visual style: {project.visual_style}. "
-                "Frames are chronological and evenly sampled. Decide recreate versus adapt from the request. "
+                f"Measured reference evidence: {evidence}. "
+                "Frames are chronological, shot-aware samples; use measured cut boundaries, timestamps, motion, "
+                "and detected text as cues to inspect rather than unquestionable labels. Decide recreate versus adapt from the request. "
                 "Describe the observed source style and motion, then produce the requested scene plan, cast, "
                 "environments, props, compositions, actions, camera language and continuity."
             ),
@@ -83,6 +88,7 @@ class ReferenceAnalyzer:
             "model": self.model.model,
             "source_name": source_name,
             "evidence_frames": [str(path) for path in frames],
+            "technical_evidence": evidence,
             "parsed_response": blueprint.model_dump(mode="json"),
         }
 

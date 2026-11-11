@@ -331,9 +331,17 @@ ssh -N -p VAST_SSH_PORT \
 Open `http://127.0.0.1:8765`, create a project with **Start from a reference
 video**, and select the local MP4, MOV, WebM, MKV, or M4V file. The service
 accepts an approximately 10–30 second video (up to 250 MB), copies it into
-managed Vast storage, samples evidence frames, and performs reference analysis
-before it creates the storyboard and Wan generation plan. The OpenCode MCP
-server remains unchanged: it is started automatically when OpenCode starts.
+managed Vast storage, detects candidate shot boundaries with FFmpeg, and selects
+shot-aware evidence frames before reference analysis. When installed, OpenCV
+adds optical-flow summaries, scikit-image adds adjacent-frame SSIM, and the
+Tesseract executable extracts visible text. These outputs and their timestamps
+are passed to Qwen as evidence and shown in the analysis trace; users should
+cautiously review false or missed cut candidates; direct boundary editing is not
+available in the current UI. None of these measurements is a calibrated fidelity
+probability. Exact-replica QA requires human review until a visual evaluator has
+been validated against human judgments. The
+OpenCode MCP server remains unchanged: it is started automatically when
+OpenCode starts.
 
 For still-image visual planning, pair OpenCode as above, open its local web UI,
 and drag the image into the prompt using a vision-capable model. Uploading an

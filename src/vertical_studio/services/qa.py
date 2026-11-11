@@ -29,13 +29,14 @@ class QualityService:
         context: dict[str, Any] | None = None,
         reference_images: list[Path] | None = None,
         goal_mode: str = "adaptation",
-        calibration_status: str = "uncalibrated",
     ) -> QAReport:
         reasons: list[str] = []
         scores = {"portrait": 0.0, "decodable": 0.0, "duration": 0.0}
         samples: list[str] = []
         advisory_pass = True
         threshold_required = None
+        calibration_status = "uncalibrated"
+        evaluator = "technical_only"
         try:
             metadata = probe_media(video)
             video_stream = next(
@@ -69,17 +70,14 @@ class QualityService:
                 advisory_pass = review.advisory_pass
                 scores.update(review.scores)
                 reasons.extend(review.reasons)
+                evaluator = self.model.model
 
             if goal_mode == "exact_replica":
                 threshold_required = 0.95
-                if calibration_status != "calibrated":
-                    reasons.append("exact replica QA is uncalibrated; require human review before auto-acceptance")
-                    advisory_pass = False
-                else:
-                    overall = sum(scores.get(name, 0.0) for name in ("portrait", "decodable", "duration")) / 3.0
-                    if overall < threshold_required:
-                        reasons.append(f"exact replica score fell below threshold {threshold_required}; request a repaired retry")
-                        advisory_pass = False
+                reasons.append(
+                    "exact replica QA is uncalibrated; require human review before acceptance"
+                )
+                advisory_pass = False
         except ModelUnavailable as exc:
             advisory_pass = False
             reasons.append(f"visual review unavailable: {exc}")
@@ -95,6 +93,8 @@ class QualityService:
             goal_mode=goal_mode,
             calibration_status=calibration_status,
             threshold_required=threshold_required,
+            evaluator=evaluator,
+            reference_images=[str(path) for path in (reference_images or [])],
         )
 
     @staticmethod

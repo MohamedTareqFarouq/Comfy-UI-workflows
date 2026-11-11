@@ -25,6 +25,11 @@
 <label id="reference-file-field" hidden>Reference video<input type="file" name="reference_file" accept="video/mp4,video/quicktime,video/webm,video/x-matroska"></label>
 <label>Title<input name="title" placeholder="Fogbound arrival"></label>
 <label><span id="idea-label">Idea</span><textarea name="idea" required minlength="3" placeholder="Describe the story or concept..."></textarea></label>
+<label>Creative goal<select name="goal_mode">
+<option value="creative">Creative brief</option>
+<option value="adaptation">Adapt from reference</option>
+<option value="exact_replica">Exact replica</option>
+</select></label>
 <div class="row"><label>Duration<select name="duration_seconds"><option>10</option><option selected>15</option><option>20</option><option>30</option></select></label>
 <label>Style<input name="visual_style" value="cinematic 3D cartoon"></label></div>
 <label class="check"><input type="checkbox" name="research_required"> This subject needs current factual research</label>

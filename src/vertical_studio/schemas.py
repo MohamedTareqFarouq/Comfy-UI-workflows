@@ -81,6 +81,7 @@ class ProjectCreate(BaseModel):
     title: str | None = Field(default=None, max_length=160)
     duration_seconds: int = Field(default=15, ge=10, le=30)
     visual_style: str = Field(default="cinematic 3D cartoon", max_length=500)
+    goal_mode: Literal["exact_replica", "adaptation", "creative"] = "creative"
     research_required: bool = False
     reference_paths: list[str] = Field(default_factory=list)
     source_urls: list[str] = Field(default_factory=list)
@@ -105,6 +106,7 @@ class Project(BaseModel):
     idea: str
     duration_seconds: int
     visual_style: str
+    goal_mode: Literal["exact_replica", "adaptation", "creative"] = "creative"
     research_required: bool
     source_mode: SourceMode = SourceMode.DESCRIPTION
     state: ProjectState
@@ -574,11 +576,14 @@ class QAReport(BaseModel):
     goal_mode: str = Field(default="adaptation", max_length=32)
     calibration_status: str = Field(default="uncalibrated", max_length=32)
     threshold_required: float | None = Field(default=None)
+    evaluator: str = Field(default="technical_only", max_length=64)
+    reference_images: list[str] = Field(default_factory=list)
 
 
 class ApprovalRequest(BaseModel):
     approved: bool
     notes: str = Field(default="", max_length=2000)
+    override_reason: str = Field(default="", max_length=2000)
 
 
 class ArtifactSelection(BaseModel):

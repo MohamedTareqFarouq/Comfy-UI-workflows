@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS projects (
   idea TEXT NOT NULL,
   duration_seconds INTEGER NOT NULL,
   visual_style TEXT NOT NULL,
+    goal_mode TEXT NOT NULL DEFAULT 'creative',
   research_required INTEGER NOT NULL,
   source_mode TEXT NOT NULL DEFAULT 'description',
   state TEXT NOT NULL,
@@ -235,6 +236,10 @@ class Database:
             connection.execute(
                 "ALTER TABLE projects ADD COLUMN source_mode TEXT NOT NULL DEFAULT 'description'"
             )
+        if "goal_mode" not in columns:
+            connection.execute(
+                "ALTER TABLE projects ADD COLUMN goal_mode TEXT NOT NULL DEFAULT 'creative'"
+            )
 
     def add_event(
         self,
@@ -255,13 +260,14 @@ class Database:
         title = request.title or request.idea.strip().split(".")[0][:80]
         with self.transaction() as connection:
             connection.execute(
-                "INSERT INTO projects(id,title,idea,duration_seconds,visual_style,research_required,source_mode,state,resume_state,execution_mode,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO projects(id,title,idea,duration_seconds,visual_style,goal_mode,research_required,source_mode,state,resume_state,execution_mode,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     project_id,
                     title,
                     request.idea,
                     request.duration_seconds,
                     request.visual_style,
+                    request.goal_mode,
                     int(request.research_required),
                     request.source_mode,
                     ProjectState.DRAFT,
