@@ -1,6 +1,7 @@
 ---
 description: Analyze imported reference images or videos for visual evidence, timing, motion, camera, and continuity without generating media
 mode: subagent
+model: ollama/qwen3vl-t4:latest
 steps: 18
 permissions:
   - action: "*"

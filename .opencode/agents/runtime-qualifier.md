@@ -1,6 +1,7 @@
 ---
 description: Read-only check of Vertical Media Studio mode, ComfyUI health, and qualified image/video capabilities before production
 mode: subagent
+model: ollama/hermes3-t4:latest
 steps: 12
 permissions:
   - action: "*"

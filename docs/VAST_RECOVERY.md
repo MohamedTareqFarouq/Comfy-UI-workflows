@@ -17,6 +17,13 @@ cd vertical-bootstrap
 
 ## 2. Correct the model source
 
+The installer in this branch is idempotent and safe on an existing host: it
+reuses Python, ComfyUI, Ollama, and OpenCode, and downloads only the requested
+model groups (`VVS_MODEL_GROUPS`, default `flux wan wan-lightning`). It also
+configures Hermes 3 and Qwen3-VL through Ollama; see
+[HERMES_OLLAMA.md](HERMES_OLLAMA.md). The Qwen Image 2.1 files are optional and
+live in `config/models-qwen-image.json`.
+
 The Flux.2 Klein workflow requires the Flux.2-packaged Qwen encoder. It must not
 be downloaded from the Z-Image repository.
 

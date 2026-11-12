@@ -32,8 +32,11 @@ class Components:
         self.db = Database(settings.db_path)
         self.model = ModelGateway(
             settings.llama_url,
-            settings.qwen_model,
+            settings.controller_model,
             timeout=settings.qwen_request_timeout,
+            vision_model=settings.vision_model,
+            provider=settings.model_provider,
+            evict_on_unload=settings.evict_ollama_models,
             managed=settings.manage_qwen and not settings.is_simulation,
             executable=settings.llama_executable,
             hf_repo=settings.qwen_hf_repo,

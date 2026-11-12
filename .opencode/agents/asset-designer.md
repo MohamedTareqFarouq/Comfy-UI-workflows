@@ -1,6 +1,7 @@
 ---
 description: Prepare and generate image anchors or reference assets for approved shot plans using qualified Flux capabilities
 mode: subagent
+model: ollama/hermes3-t4:latest
 steps: 24
 permissions:
   - action: "*"

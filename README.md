@@ -33,6 +33,10 @@ cd vertical-video-studio
 
 Open <http://127.0.0.1:8765>.
 
+For a Hermes 3 + Qwen3-VL gateway served by Ollama, see
+[`docs/HERMES_OLLAMA.md`](docs/HERMES_OLLAMA.md). The Vast/bootstrap installer
+configures it automatically.
+
 For the capability-routed backend without the PWA, see
 [`docs/HEADLESS_WINDOWS.md`](docs/HEADLESS_WINDOWS.md). It documents native
 Windows and WSL2 installation, persistent Streamable HTTP MCP for OpenCode, the

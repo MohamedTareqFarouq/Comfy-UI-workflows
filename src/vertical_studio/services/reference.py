@@ -85,7 +85,7 @@ class ReferenceAnalyzer:
             max_tokens=6144,
         )
         return blueprint, {
-            "model": self.model.model,
+            "model": getattr(self.model, "vision_model", self.model.model),
             "source_name": source_name,
             "evidence_frames": [str(path) for path in frames],
             "technical_evidence": evidence,

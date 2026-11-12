@@ -154,12 +154,16 @@ class HeadlessMediaService:
             simulation=settings.is_simulation,
             qualification_report=settings.data_dir / "qualification" / "latest.json",
             allow_unqualified=settings.allow_unqualified_capabilities,
+            enable_qwen_image=settings.enable_qwen_image,
         )
         self.generator = MockComfyClient() if settings.is_simulation else ComfyClient(settings.comfy_url, settings.workflows_dir)
         self.model = ModelGateway(
             settings.llama_url,
-            settings.qwen_model,
+            settings.controller_model,
             timeout=settings.qwen_request_timeout,
+            vision_model=settings.vision_model,
+            provider=settings.model_provider,
+            evict_on_unload=settings.evict_ollama_models,
             managed=settings.manage_qwen and not settings.is_simulation,
             executable=settings.llama_executable,
             hf_repo=settings.qwen_hf_repo,

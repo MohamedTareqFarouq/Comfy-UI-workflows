@@ -1,6 +1,7 @@
 ---
 description: Convert a user brief and reference-analysis evidence into a feasible shot list, continuity plan, and acceptance criteria
 mode: subagent
+model: ollama/hermes3-t4:latest
 steps: 16
 permissions:
   - action: "*"

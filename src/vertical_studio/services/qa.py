@@ -75,7 +75,7 @@ class QualityService:
                 advisory_pass = review.advisory_pass
                 scores.update(review.scores)
                 reasons.extend(review.reasons)
-                evaluator = self.model.model
+                evaluator = getattr(self.model, "vision_model", self.model.model)
 
             if goal_mode == "exact_replica":
                 threshold_required = 0.95
@@ -162,7 +162,7 @@ class QualityService:
                 advisory_pass = review.advisory_pass
                 scores.update(review.scores)
                 reasons.extend(review.reasons)
-                evaluator = self.model.model
+                evaluator = getattr(self.model, "vision_model", self.model.model)
             except ModelUnavailable as exc:
                 advisory_pass = False
                 evaluator = "manual_review_required"

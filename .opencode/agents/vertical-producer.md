@@ -1,6 +1,7 @@
 ---
 description: Autonomous vertical media producer that plans only when needed and safely steers generation
 mode: primary
+model: ollama/hermes3-t4:latest
 steps: 80
 permissions:
   - action: "*"

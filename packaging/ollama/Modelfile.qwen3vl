@@ -1,0 +1,12 @@
+# Qwen3-VL 8B — vision profile for reference analysis and visual QA.
+# Build with: ollama create qwen3vl-t4 -f packaging/ollama/Modelfile.qwen3vl
+FROM qwen3-vl:8b-instruct
+
+PARAMETER num_ctx 32768
+PARAMETER temperature 0.7
+PARAMETER top_p 0.8
+PARAMETER top_k 20
+PARAMETER repeat_penalty 1.05
+
+SYSTEM """You are a precise multimodal analyst. Describe images and video frames
+accurately, read visible text, and return only the requested JSON structure."""

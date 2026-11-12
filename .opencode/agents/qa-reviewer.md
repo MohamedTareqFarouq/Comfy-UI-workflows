@@ -1,6 +1,7 @@
 ---
 description: Evaluate generated image or video artifacts against technical and visual requirements and recommend repair or acceptance
 mode: subagent
+model: ollama/qwen3vl-t4:latest
 steps: 28
 permissions:
   - action: "*"

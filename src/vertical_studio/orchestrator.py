@@ -29,6 +29,7 @@ class Orchestrator:
             simulation=settings.is_simulation,
             qualification_report=settings.data_dir / "qualification" / "latest.json",
             allow_unqualified=settings.allow_unqualified_capabilities,
+            enable_qwen_image=settings.enable_qwen_image,
         )
 
     def reconcile_project_state(self, project_id: str) -> Project:

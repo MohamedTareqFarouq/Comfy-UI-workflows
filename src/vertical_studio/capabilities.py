@@ -133,12 +133,17 @@ def _capabilities() -> list[Capability]:
 class CapabilityRegistry:
     def __init__(self, workflows_dir: Path, *, simulation: bool = True,
                  qualification_report: Path | None = None,
-                 allow_unqualified: bool = False):
+                 allow_unqualified: bool = False,
+                 enable_qwen_image: bool = True):
         self.workflows_dir = workflows_dir
         self.simulation = simulation
         self.qualification_report = qualification_report
         self.allow_unqualified = allow_unqualified
-        self._items = {item.id: item for item in _capabilities()}
+        self._items = {
+            item.id: item
+            for item in _capabilities()
+            if enable_qwen_image or item.id != "qwen_image21.multi_reference.v1"
+        }
         self._refresh_states()
 
     def _refresh_states(self) -> None:

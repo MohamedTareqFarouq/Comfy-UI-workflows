@@ -1,6 +1,7 @@
 ---
 description: Render a final sequence from an explicitly ordered list of artifacts already approved by the user
 mode: subagent
+model: ollama/hermes3-t4:latest
 steps: 16
 permissions:
   - action: "*"

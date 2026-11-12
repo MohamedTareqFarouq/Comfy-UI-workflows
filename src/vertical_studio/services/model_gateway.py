@@ -26,6 +26,9 @@ class ModelGateway:
         model: str,
         timeout: float = 600.0,
         *,
+        vision_model: str | None = None,
+        provider: str = "llamacpp",
+        evict_on_unload: bool = False,
         managed: bool = False,
         executable: str = "llama",
         hf_repo: str = "Qwen/Qwen3-VL-4B-Instruct-GGUF:Q4_K_M",
@@ -34,8 +37,13 @@ class ModelGateway:
         start_timeout: int = 300,
         log_path: Path | None = None,
     ):
+        if provider not in {"llamacpp", "ollama"}:
+            raise ValueError("provider must be 'llamacpp' or 'ollama'")
         self.base_url = base_url.rstrip("/")
         self.model = model
+        self.vision_model = vision_model or model
+        self.provider = provider
+        self.evict_on_unload = evict_on_unload
         self.timeout = timeout
         self.managed = managed
         self.executable = executable
@@ -50,11 +58,33 @@ class ModelGateway:
         self.last_trace: dict[str, Any] | None = None
 
     def health(self) -> dict[str, Any]:
+        path = "/api/tags" if self.provider == "ollama" else "/health"
         try:
-            response = httpx.get(f"{self.base_url}/health", timeout=3)
-            return {"available": response.is_success, "status": response.status_code}
+            response = httpx.get(f"{self.base_url}{path}", timeout=3)
+            result: dict[str, Any] = {
+                "available": response.is_success,
+                "status": response.status_code,
+                "provider": self.provider,
+                "model": self.model,
+                "vision_model": self.vision_model,
+            }
+            if response.is_success and self.provider == "ollama":
+                try:
+                    names = {
+                        item.get("name")
+                        for item in response.json().get("models", [])
+                    }
+                    result["controller_loaded_remotely"] = self.model in names
+                    result["vision_loaded_remotely"] = self.vision_model in names
+                except (ValueError, AttributeError, TypeError):
+                    pass
+            return result
         except httpx.HTTPError as exc:
-            return {"available": False, "error": str(exc)}
+            return {
+                "available": False,
+                "error": str(exc),
+                "provider": self.provider,
+            }
 
     @property
     def owned(self) -> bool:
@@ -62,15 +92,22 @@ class ModelGateway:
 
     def ensure_available(self) -> None:
         with self._lock:
+            if self.provider != "llamacpp" and self.managed:
+                raise ModelUnavailable(
+                    "managed startup is only supported for llama.cpp; "
+                    f"start the {self.provider} server separately"
+                )
             if self.health().get("available"):
                 if self.managed and not self.owned:
                     raise ModelUnavailable(
-                        "Qwen is already running externally; stop it so Vertical Studio "
+                        "The vision model is already running externally; stop it so Vertical Studio "
                         "can manage GPU loading and unloading"
                     )
                 return
             if not self.managed:
-                raise ModelUnavailable(f"Qwen is unavailable at {self.base_url}")
+                raise ModelUnavailable(
+                    f"{self.provider} endpoint is unavailable at {self.base_url}"
+                )
             if self._process is not None and self._process.poll() is not None:
                 self._close_log()
                 self._process = None
@@ -244,7 +281,7 @@ class ModelGateway:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             detail = response.text.strip()
-            message = f"Qwen request failed with HTTP {response.status_code}"
+            message = f"Model request failed with HTTP {response.status_code}"
             if detail:
                 message += f": {detail[:2000]}"
             raise ModelUnavailable(message) from exc
@@ -273,7 +310,7 @@ class ModelGateway:
             for image_url in image_urls
         )
         payload = {
-            "model": self.model,
+            "model": self.vision_model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": content},
@@ -296,7 +333,7 @@ class ModelGateway:
                 last_content = response.json()["choices"][0]["message"]["content"]
                 parsed = self._parse_structured(output_type, last_content)
                 self.last_trace = {
-                    "model": self.model,
+                    "model": self.vision_model,
                     "request": payload,
                     "raw_response": last_content,
                     "parsed_response": parsed.model_dump(mode="json"),
@@ -339,6 +376,11 @@ class ModelGateway:
 
     def unload(self) -> None:
         with self._lock:
+            if self.provider == "ollama":
+                if self.evict_on_unload:
+                    for model in {self.model, self.vision_model}:
+                        self._ollama_keep_alive(model, 0)
+                return
             if not self.owned:
                 return
             assert self._process is not None
@@ -355,3 +397,13 @@ class ModelGateway:
         if self._log_stream is not None:
             self._log_stream.close()
             self._log_stream = None
+
+    def _ollama_keep_alive(self, model: str, keep_alive: int) -> None:
+        try:
+            httpx.post(
+                f"{self.base_url}/api/generate",
+                json={"model": model, "keep_alive": keep_alive},
+                timeout=10,
+            )
+        except httpx.HTTPError:
+            pass

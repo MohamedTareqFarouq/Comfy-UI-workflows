@@ -1050,7 +1050,14 @@ def test_wan_prompt_enforces_project_style(monkeypatch, tmp_path: Path) -> None:
 def test_model_manifest_covers_every_workflow_model() -> None:
     root = Path(__file__).parents[1]
     manifest = json.loads((root / "config" / "models.json").read_text())
-    declared = {(item["directory"], item["file"]) for item in manifest["comfy_models"]}
+    optional_path = root / "config" / "models-qwen-image.json"
+    optional = (
+        json.loads(optional_path.read_text()) if optional_path.exists() else {"comfy_models": []}
+    )
+    declared = {
+        (item["directory"], item["file"])
+        for item in [*manifest["comfy_models"], *optional["comfy_models"]]
+    }
     referenced: set[tuple[str, str]] = set()
     fields = {
         "unet_name": "diffusion_models", "clip_name": "text_encoders",
@@ -1068,8 +1075,12 @@ def test_model_manifest_covers_every_workflow_model() -> None:
                 if isinstance(value, str):
                     referenced.add((directory, value))
     assert referenced <= declared
-    assert len(manifest["comfy_models"]) == 12
-    assert all(item["url"].startswith("https://huggingface.co/") for item in manifest["comfy_models"])
+    assert len(manifest["comfy_models"]) == 9
+    assert len(optional["comfy_models"]) == 3
+    assert all(
+        item["url"].startswith("https://huggingface.co/")
+        for item in [*manifest["comfy_models"], *optional["comfy_models"]]
+    )
 
 
 def test_flux_t2i_workflow_uses_flux2_encoder_contract() -> None:

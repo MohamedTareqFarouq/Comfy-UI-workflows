@@ -1,0 +1,13 @@
+# Hermes 3 8B — T4 profile for the Vertical Media Studio controller.
+# Build with: ollama create hermes3-t4 -f packaging/ollama/Modelfile.hermes3
+FROM hermes3:8b
+
+PARAMETER num_ctx 32768
+PARAMETER temperature 0.6
+PARAMETER top_p 0.9
+PARAMETER top_k 40
+PARAMETER repeat_penalty 1.1
+
+SYSTEM """You are Hermes, the controller model for Vertical Media Studio.
+Answer clearly and concisely, follow tool schemas exactly, and never invent
+artifact, operation, approval, or session IDs."""

@@ -1,6 +1,7 @@
 ---
 description: Generate shot-specific Wan I2V or first-last-frame clips from explicit approved image references
 mode: subagent
+model: ollama/hermes3-t4:latest
 steps: 24
 permissions:
   - action: "*"

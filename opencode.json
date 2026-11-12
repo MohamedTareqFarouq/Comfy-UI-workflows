@@ -1,18 +1,98 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "default_agent": "vertical-producer",
+  "default_agent": "hermes-operator",
+  "model": "ollama/hermes3-t4:latest",
+  "providers": {
+    "ollama": {
+      "name": "Ollama (Hermes 3 + Qwen3-VL)",
+      "settings": {
+        "baseURL": "http://127.0.0.1:11434/v1"
+      },
+      "models": {
+        "hermes3-t4:latest": {
+          "name": "Hermes 3 8B (controller)",
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 32768,
+            "output": 4096
+          }
+        },
+        "qwen3vl-t4:latest": {
+          "name": "Qwen3-VL 8B (vision, 32k)",
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text",
+              "image"
+            ]
+          },
+          "limit": {
+            "context": 32768,
+            "output": 4096
+          }
+        },
+        "qwen3-vl:8b-instruct": {
+          "name": "Qwen3-VL 8B Instruct (raw)",
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text",
+              "image"
+            ]
+          },
+          "limit": {
+            "context": 16384,
+            "output": 4096
+          }
+        },
+        "qwen3-vl:8b": {
+          "name": "Qwen3-VL 8B (raw)",
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text",
+              "image"
+            ]
+          },
+          "limit": {
+            "context": 16384,
+            "output": 4096
+          }
+        }
+      }
+    }
+  },
   "mcp": {
     "servers": {
       "vertical-media-production": {
         "type": "local",
-        "command": [".venv/bin/python", "-m", "vertical_studio.mcp_server", "--transport", "stdio"],
-        "cwd": ".",
+        "command": [
+          "/opt/vertical-media/vertical-video-studio/.venv/bin/python",
+          "-m",
+          "vertical_studio.mcp_server",
+          "--transport",
+          "stdio"
+        ],
+        "cwd": "/opt/vertical-media/vertical-video-studio",
+        "codemode": false,
         "environment": {
-          "VVS_DATA_DIR": "{env:VVS_DATA_DIR}",
-          "VVS_EXECUTION_MODE": "{env:VVS_EXECUTION_MODE}",
-          "VVS_COMFY_URL": "{env:VVS_COMFY_URL}",
-          "VVS_ALLOW_UNQUALIFIED_CAPABILITIES": "{env:VVS_ALLOW_UNQUALIFIED_CAPABILITIES}",
-          "VVS_KEYFRAME_IMAGE_BACKEND": "{env:VVS_KEYFRAME_IMAGE_BACKEND}"
+          "VVS_DATA_DIR": "/opt/vertical-media/data",
+          "VVS_EXECUTION_MODE": "real",
+          "VVS_COMFY_URL": "http://127.0.0.1:8188",
+          "VVS_MODEL_PROVIDER": "ollama",
+          "VVS_LLAMA_URL": "http://127.0.0.1:11434",
+          "VVS_CONTROLLER_MODEL": "hermes3-t4:latest",
+          "VVS_VISION_MODEL": "qwen3vl-t4:latest",
+          "VVS_QWEN_MODEL": "qwen3vl-t4:latest",
+          "VVS_OLLAMA_EVICT": "true",
+          "VVS_ENABLE_QWEN_IMAGE": "false",
+          "VVS_ALLOW_UNQUALIFIED_CAPABILITIES": "true",
+          "VVS_KEYFRAME_IMAGE_BACKEND": "klein"
         }
       }
     }
